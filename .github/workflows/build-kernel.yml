@@ -143,6 +143,39 @@ jobs:
               ;;
           esac
 
+      - name: Fix KernelSU Integration
+        run: |
+          cd kernel
+          # The kernel source has pre-embedded KernelSU VFS hooks that need the header included
+          # Check if fs/exec.c has KernelSU hooks but missing include
+          if grep -q "ksu_handle_execveat" fs/exec.c; then
+            echo "Found KernelSU hooks in fs/exec.c, checking includes..."
+            if ! grep -q "#include.*ksu.h" fs/exec.c && ! grep -q "#include.*kernelsu" fs/exec.c; then
+              echo "Adding KernelSU include to fs/exec.c..."
+              # Find KernelSU directory
+              KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
+              if [ -n "$KSU_DIR" ]; then
+                # Add include after other includes
+                sed -i '/#include <linux\/fs.h>/a #include <linux/ksu.h>' fs/exec.c 2>/dev/null || \
+                sed -i '1a #include <linux/ksu.h>' fs/exec.c
+                echo "Added KernelSU include"
+              fi
+            fi
+          fi
+
+          # Ensure KernelSU exports the required symbols
+          KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
+          if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
+            # Check if ksu.h exists and has the required functions
+            if [ -f "$KSU_DIR/kernel/include/linux/ksu.h" ]; then
+              echo "KernelSU header found at $KSU_DIR/kernel/include/linux/ksu.h"
+              cat "$KSU_DIR/kernel/include/linux/ksu.h" | head -50
+            fi
+            # List files in KernelSU
+            echo "KernelSU kernel files:"
+            find "$KSU_DIR/kernel" -name "*.h" -o -name "*.c" | head -20
+          fi
+
       - name: Apply SUSFS Patches
         if: env.SUSFS_ENABLED == 'true'
         run: |
