@@ -120,22 +120,34 @@ jobs:
           KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
           echo "KernelSU directory: $KSU_DIR"
 
-          if [ "$KERNELSU_VARIANT" = "sukisu" ]; then
-            echo "SukiSU already has SUSFS integrated, skipping patches..."
-          else
-            # Apply universal SUSFS patch to KernelSU
-            echo "Applying universal SUSFS patch..."
-            if [ -f "../patches/KernelSU-Next-Implement-SUSFS-v1.5.5-Universal.patch" ]; then
-              cd "$KSU_DIR"
-              git apply "../../patches/KernelSU-Next-Implement-SUSFS-v1.5.5-Universal.patch" || echo "Universal patch may already be applied"
-              cd ..
-            fi
-          fi
-
           # Clone susfs4ksu for kernel patches
           echo "Cloning susfs4ksu..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
           git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu || true
+
+          # Apply SUSFS patch to KernelSU
+          echo "Applying SUSFS patch to KernelSU..."
+          if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
+            # Try universal patch first
+            if [ -f "../patches/KernelSU-Next-Implement-SUSFS-v1.5.5-Universal.patch" ]; then
+              cd "$KSU_DIR"
+              git apply "../../patches/KernelSU-Next-Implement-SUSFS-v1.5.5-Universal.patch" || echo "Universal patch may already be applied or needs adjustment"
+              cd ..
+            fi
+
+            # Try susfs4ksu KernelSU patches
+            if [ -d "susfs4ksu/kernel_patches/KernelSU" ]; then
+              echo "Applying susfs4ksu KernelSU patches..."
+              cd "$KSU_DIR"
+              for patch in ../susfs4ksu/kernel_patches/KernelSU/*.patch; do
+                if [ -f "$patch" ]; then
+                  echo "Applying $(basename $patch)..."
+                  git apply "$patch" || echo "Patch $(basename $patch) may already be applied"
+                fi
+              done
+              cd ..
+            fi
+          fi
 
           # Copy SUSFS source files to kernel
           if [ -d "susfs4ksu/kernel_patches" ]; then
@@ -151,6 +163,12 @@ jobs:
               echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
               echo 'obj-$(CONFIG_KSU_SUSFS_SUS_SU) += sus_su.o' >> fs/Makefile
             fi
+          fi
+
+          # Apply main kernel SUSFS patch
+          echo "Applying kernel SUSFS patch..."
+          if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch" ]; then
+            git apply susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "Kernel SUSFS patch may need manual adjustment"
           fi
 
           # Apply device-specific SUSFS fixes
