@@ -107,8 +107,8 @@ jobs:
               curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
               ;;
             next)
-              echo "Setting up KernelSU-Next..."
-              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh" | bash -s stable
+              echo "Setting up KernelSU-Next (legacy)..."
+              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
               ;;
             rsuntk)
               echo "Setting up rsuntk KernelSU..."
