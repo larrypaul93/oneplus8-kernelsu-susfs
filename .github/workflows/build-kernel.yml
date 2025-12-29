@@ -1,0 +1,307 @@
+name: Build OnePlus 8 Kernel with KernelSU-Next + SUSFS
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_source:
+        description: 'Kernel source repo'
+        required: true
+        default: 'https://github.com/HELLBOY017/kernel_oneplus_sm8250.git'
+      kernel_branch:
+        description: 'Kernel branch'
+        required: true
+        default: 'thirteen'
+      kernelsu_variant:
+        description: 'KernelSU variant'
+        required: true
+        default: 'next'
+        type: choice
+        options:
+          - next
+          - rsuntk
+          - sukisu
+          - wild
+      susfs_enabled:
+        description: 'Enable SUSFS'
+        required: true
+        default: true
+        type: boolean
+      device_name:
+        description: 'Device name for zip'
+        required: true
+        default: 'OnePlus8_Series'
+
+env:
+  KERNEL_SOURCE: ${{ github.event.inputs.kernel_source || 'https://github.com/HELLBOY017/kernel_oneplus_sm8250.git' }}
+  KERNEL_BRANCH: ${{ github.event.inputs.kernel_branch || 'thirteen' }}
+  DEFCONFIG: vendor/kona-perf_defconfig
+  DEVICE_NAME: ${{ github.event.inputs.device_name || 'OnePlus8_Series' }}
+  KERNELSU_VARIANT: ${{ github.event.inputs.kernelsu_variant || 'next' }}
+  SUSFS_ENABLED: ${{ github.event.inputs.susfs_enabled || 'true' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git curl wget bc bison build-essential ccache flex \
+            g++-multilib gcc-multilib gnupg gperf imagemagick \
+            lib32ncurses5-dev lib32readline-dev lib32z1-dev \
+            liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev \
+            libxml2 libxml2-utils lzop pngcrush rsync schedtool \
+            squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip \
+            cpio kmod libelf-dev device-tree-compiler jq
+
+      - name: Setup Clang Toolchain
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/toolchains/clang
+          curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/21.0.0-20250626-release/Clang-21.0.0-20250626.tar.gz" | \
+            tar -xzf - -C $GITHUB_WORKSPACE/toolchains/clang
+          echo "$GITHUB_WORKSPACE/toolchains/clang/bin" >> $GITHUB_PATH
+
+      - name: Setup GCC Toolchains
+        run: |
+          git clone --depth=1 -b android12L-release \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+            $GITHUB_WORKSPACE/toolchains/gcc64
+          git clone --depth=1 -b android12L-release \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
+            $GITHUB_WORKSPACE/toolchains/gcc32
+          echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_PATH
+
+      - name: Clone Kernel Source
+        run: |
+          git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_SOURCE kernel
+
+      - name: Setup KernelSU
+        run: |
+          cd kernel
+
+          # Remove existing KernelSU
+          rm -rf KernelSU KernelSU-Next drivers/kernelsu
+
+          case "$KERNELSU_VARIANT" in
+            next)
+              echo "Setting up KernelSU-Next..."
+              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+              ;;
+            rsuntk)
+              echo "Setting up rsuntk KernelSU..."
+              curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -
+              ;;
+            sukisu)
+              echo "Setting up SukiSU..."
+              curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-v
+              ;;
+            wild)
+              echo "Setting up WildKernelSU..."
+              curl -LSs "https://raw.githubusercontent.com/WildPlusKernel/KernelSU/main/kernel/setup.sh" | bash -
+              ;;
+          esac
+
+      - name: Apply SUSFS Patches
+        if: env.SUSFS_ENABLED == 'true'
+        run: |
+          cd kernel
+
+          echo "Cloning SUSFS patches..."
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
+          git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu || true
+
+          # Apply kernel patches if available
+          if [ -d "susfs4ksu/kernel_patches" ]; then
+            echo "Applying SUSFS kernel patches..."
+            for patch in susfs4ksu/kernel_patches/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "Applying $(basename $patch)..."
+                git apply "$patch" || echo "Patch may already be applied: $(basename $patch)"
+              fi
+            done
+
+            # Copy SUSFS source files
+            cp -r susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+            cp -r susfs4ksu/kernel_patches/include/* include/ 2>/dev/null || true
+          fi
+
+          # Apply KernelSU SUSFS integration patch
+          if [ "$KERNELSU_VARIANT" = "next" ]; then
+            echo "Downloading KernelSU-Next SUSFS patch..."
+            curl -sL "https://raw.githubusercontent.com/wshamroukh/KernelSU-Next-SUSFS-kernelv4.19/legacy/susfs-v2.0.0_kernelsu-next-legacy.patch" -o ksu_susfs.patch
+
+            KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
+            if [ -n "$KSU_DIR" ]; then
+              cd "$KSU_DIR"
+              git apply ../ksu_susfs.patch || echo "KSU SUSFS patch may already be applied"
+              cd ..
+            fi
+          fi
+
+      - name: Configure Kernel
+        run: |
+          cd kernel
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          make O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            $DEFCONFIG
+
+          # Enable KernelSU
+          scripts/config --file out/.config -e KSU
+
+          # Enable SUSFS if enabled
+          if [ "$SUSFS_ENABLED" = "true" ]; then
+            scripts/config --file out/.config -e KSU_SUSFS || true
+            scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH || true
+            scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT || true
+            scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT || true
+            scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT || true
+            scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME || true
+            scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG || true
+            scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS || true
+          fi
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          make -j$(nproc --all) O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            NM=llvm-nm \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            2>&1 | tee build.log
+
+      - name: Package with AnyKernel3
+        run: |
+          cd kernel
+
+          if [ ! -f "out/arch/arm64/boot/Image" ]; then
+            echo "ERROR: Kernel image not found!"
+            cat build.log | tail -100
+            exit 1
+          fi
+
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cd AnyKernel3
+          rm -rf .git modules patch ramdisk
+
+          cp ../out/arch/arm64/boot/Image .
+          [ -f "../out/arch/arm64/boot/dtb" ] && cp ../out/arch/arm64/boot/dtb .
+          [ -f "../out/arch/arm64/boot/dtbo.img" ] && cp ../out/arch/arm64/boot/dtbo.img .
+
+          cat > anykernel.sh << 'AKEOF'
+          # AnyKernel3 Ramdisk Mod Script
+          # osm0sis @ xda-developers
+
+          properties() { '
+          kernel.string=KernelSU-SUSFS for OnePlus 8 Series
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=instantnoodle
+          device.name2=instantnoodlep
+          device.name3=kebab
+          device.name4=lemonades
+          device.name5=OnePlus8
+          device.name6=OnePlus8Pro
+          device.name7=OnePlus8T
+          device.name8=OnePlus9R
+          supported.versions=11-15
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=1;
+          ramdisk_compression=auto;
+          . tools/ak3-core.sh;
+          set_perm_recursive 0 0 755 644 $ramdisk/*;
+          set_perm_recursive 0 0 750 750 $ramdisk/init* $ramdisk/sbin;
+          dump_boot;
+          write_boot;
+          AKEOF
+
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          SUSFS_TAG=""
+          [ "$SUSFS_ENABLED" = "true" ] && SUSFS_TAG="_SUSFS"
+          ZIP_NAME="KernelSU-${KERNELSU_VARIANT}${SUSFS_TAG}_${DEVICE_NAME}_${TIMESTAMP}.zip"
+
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: KernelSU Build ${{ github.run_number }}
+          body: |
+            ## OnePlus 8 Series Kernel Build
+
+            **Kernel Source:** ${{ env.KERNEL_SOURCE }}
+            **Branch:** ${{ env.KERNEL_BRANCH }}
+            **KernelSU Variant:** ${{ env.KERNELSU_VARIANT }}
+            **SUSFS:** ${{ env.SUSFS_ENABLED }}
+
+            ### Supported Devices
+            - OnePlus 8 (instantnoodle)
+            - OnePlus 8 Pro (instantnoodlep)
+            - OnePlus 8T (kebab)
+            - OnePlus 9R (lemonades)
+
+            ### Installation
+            1. Boot to TWRP/custom recovery
+            2. Flash the zip file
+            3. Reboot
+
+            Or use fastboot:
+            ```
+            fastboot flash boot boot.img
+            ```
+          files: ${{ env.ZIP_NAME }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

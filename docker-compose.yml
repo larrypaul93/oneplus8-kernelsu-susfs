@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  kernel-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oneplus-kernel-builder
+    container_name: kernel-build
+    volumes:
+      - ./output:/output
+      - ./cache:/kernel/kernel_source  # Cache kernel source
+      - ccache:/root/.ccache
+    environment:
+      - KERNEL_SOURCE=https://github.com/HELLBOY017/kernel_oneplus_sm8250.git
+      - KERNEL_BRANCH=thirteen
+      - DEFCONFIG=vendor/kona-perf_defconfig
+      - DEVICE_NAME=oneplus8
+      - SUSFS_VERSION=v1.5.9
+      - CCACHE_DIR=/root/.ccache
+      - USE_CCACHE=1
+    tty: true
+    stdin_open: true
+
+volumes:
+  ccache:

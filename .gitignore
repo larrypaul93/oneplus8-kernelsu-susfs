@@ -1,0 +1,6 @@
+output/
+*.zip
+*.img
+*.log
+.DS_Store
+cache/
