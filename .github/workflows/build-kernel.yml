@@ -70,7 +70,8 @@ jobs:
       - name: Setup Clang Toolchain
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchains/clang
-          curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz" | \
+          # Using Clang 14 for better kernel 4.19 compatibility
+          curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20250704-release/Clang-14.0.6-20250704.tar.gz" | \
             tar -xzf - -C $GITHUB_WORKSPACE/toolchains/clang
           echo "$GITHUB_WORKSPACE/toolchains/clang/bin" >> $GITHUB_PATH
 
@@ -217,6 +218,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LLVM_IAS=0 \
             NM=llvm-nm \
             OBJDUMP=llvm-objdump \
             STRIP=llvm-strip \

@@ -1,4 +1,5 @@
-FROM ubuntu:22.04
+# Use x86_64 platform as toolchains are compiled for x86_64
+FROM --platform=linux/amd64 ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
@@ -18,14 +19,11 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     gperf \
     imagemagick \
-    lib32ncurses5-dev \
-    lib32readline-dev \
+    lib32ncurses-dev \
     lib32z1-dev \
     liblz4-tool \
-    libncurses5-dev \
-    libsdl1.2-dev \
+    libncurses-dev \
     libssl-dev \
-    libwxgtk3.0-gtk3-dev \
     libxml2 \
     libxml2-utils \
     lzop \
@@ -41,7 +39,6 @@ RUN apt-get update && apt-get install -y \
     cpio \
     kmod \
     libelf-dev \
-    pahole \
     device-tree-compiler \
     jq \
     && rm -rf /var/lib/apt/lists/*
@@ -49,9 +46,9 @@ RUN apt-get update && apt-get install -y \
 # Create working directory
 WORKDIR /kernel
 
-# Download and extract Clang toolchain
+# Download and extract Clang toolchain (using Clang 14 for better kernel 4.19 compatibility)
 RUN mkdir -p /toolchains/clang && \
-    curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/10.0.1-20220724-release/Clang-10.0.1-20220724.tar.gz" | \
+    curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20250704-release/Clang-14.0.6-20250704.tar.gz" | \
     tar -xzf - -C /toolchains/clang
 
 # Download GCC toolchains
@@ -62,6 +59,13 @@ RUN git clone --depth=1 -b android12L-release \
 RUN git clone --depth=1 -b android12L-release \
     https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
     /toolchains/gcc32
+
+# Create wrapper scripts for GCC (needed for kernel version detection scripts)
+# The kernel scripts check gcc versions even when using clang as the main compiler
+RUN echo '#!/bin/bash\nexec gcc "$@"' > /toolchains/gcc64/bin/aarch64-linux-android-gcc && \
+    chmod +x /toolchains/gcc64/bin/aarch64-linux-android-gcc && \
+    echo '#!/bin/bash\nexec gcc "$@"' > /toolchains/gcc32/bin/arm-linux-androideabi-gcc && \
+    chmod +x /toolchains/gcc32/bin/arm-linux-androideabi-gcc
 
 # Set up environment
 ENV PATH="/toolchains/clang/bin:/toolchains/gcc64/bin:/toolchains/gcc32/bin:${PATH}"

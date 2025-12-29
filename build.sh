@@ -1,12 +1,15 @@
 #!/bin/bash
 set -e
 
-# Configuration
-KERNEL_SOURCE="${KERNEL_SOURCE:-https://github.com/HELLBOY017/kernel_oneplus_sm8250.git}"
-KERNEL_BRANCH="${KERNEL_BRANCH:-thirteen}"
+# Configuration - can be overridden via environment variables
+KERNEL_SOURCE="${KERNEL_SOURCE:-https://github.com/JackA1ltman/android_kernel_oneplus_sm8250_los_noksu.git}"
+KERNEL_BRANCH="${KERNEL_BRANCH:-staging}"
 DEFCONFIG="${DEFCONFIG:-vendor/kona-perf_defconfig}"
-DEVICE_NAME="${DEVICE_NAME:-oneplus8}"
-SUSFS_VERSION="${SUSFS_VERSION:-v1.5.9}"
+DEVICE_NAME="${DEVICE_NAME:-OnePlus8_Series}"
+KERNELSU_VARIANT="${KERNELSU_VARIANT:-ksu}"
+SUSFS_ENABLED="${SUSFS_ENABLED:-true}"
+PATCHES_REPO="${PATCHES_REPO:-JackA1ltman/NonGKI_Kernel_Patches}"
+PATCHES_BRANCH="${PATCHES_BRANCH:-op_kernel}"
 
 # Colors
 RED='\033[0;31m'
@@ -30,71 +33,113 @@ clone_kernel() {
     fi
 }
 
-# Setup KernelSU-Next
+# Clone patches repo
+clone_patches() {
+    log "Cloning patches repo..."
+    if [ ! -d "patches" ]; then
+        git clone --depth=1 -b "$PATCHES_BRANCH" "https://github.com/$PATCHES_REPO.git" patches
+    fi
+}
+
+# Setup KernelSU based on variant
 setup_kernelsu() {
-    log "Setting up KernelSU-Next..."
+    log "Setting up KernelSU (variant: $KERNELSU_VARIANT)..."
     cd kernel_source
 
-    # Remove existing KernelSU if present
-    rm -rf KernelSU KernelSU-Next drivers/kernelsu
+    case "$KERNELSU_VARIANT" in
+        ksu)
+            log "Setting up original KernelSU (tiann)..."
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+            ;;
+        sukisu)
+            log "Setting up SukiSU-Ultra..."
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+            ;;
+        next)
+            log "Setting up KernelSU-Next (legacy)..."
+            curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
+            ;;
+        rsuntk)
+            log "Setting up rsuntk KernelSU..."
+            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
+            ;;
+        *)
+            error "Unknown KernelSU variant: $KERNELSU_VARIANT"
+            ;;
+    esac
 
-    # Clone KernelSU-Next
-    git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git -b next
+    cd ..
+}
 
-    # Create symlink
-    ln -sf ../KernelSU-Next/kernel drivers/kernelsu
-
-    # Add to Makefile if not present
-    if ! grep -q "kernelsu" drivers/Makefile; then
-        echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+# Apply SUSFS patches following official instructions
+apply_susfs() {
+    if [ "$SUSFS_ENABLED" != "true" ]; then
+        log "SUSFS disabled, skipping..."
+        return
     fi
 
-    # Add to Kconfig if not present
-    if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
-        sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+    log "Applying SUSFS patches..."
+    cd kernel_source
+
+    # Find KernelSU directory
+    KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
+    log "KernelSU directory: $KSU_DIR"
+
+    # Clone susfs4ksu for kernel patches (kernel-4.19 branch)
+    log "Cloning susfs4ksu (kernel-4.19 branch)..."
+    git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
+    git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu
+
+    # Step 1: Apply revert commit in KernelSU (as per official instructions)
+    log "Step 1: Reverting kprobe commit in KernelSU..."
+    if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
+        cd "$KSU_DIR"
+        git revert --no-commit 898e9d4f8ca9b2f46b0c6b36b80a872b5b88d899 2>/dev/null || log "Revert may not be needed for this version"
+        cd ..
+    fi
+
+    # Step 2: Disable kprobes in KernelSU (replace #ifdef CONFIG_KPROBES with #if defined(CONFIG_KPROBES) && 0)
+    log "Step 2: Disabling kprobes in KernelSU..."
+    if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
+        find "$KSU_DIR" -name "*.c" -o -name "*.h" | xargs sed -i 's/#ifdef CONFIG_KPROBES/#if defined(CONFIG_KPROBES) \&\& 0/g' 2>/dev/null || true
+        find "$KSU_DIR" -name "*.c" -o -name "*.h" | xargs sed -i 's/#if defined(CONFIG_KPROBES)/#if defined(CONFIG_KPROBES) \&\& 0/g' 2>/dev/null || true
+    fi
+
+    # Step 3: Copy SUSFS patch to KernelSU folder and apply
+    log "Step 3: Copying and applying SUSFS KernelSU patch..."
+    if [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
+        cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "$KSU_DIR/"
+        cd "$KSU_DIR"
+        patch -p1 < 10_enable_susfs_for_ksu.patch || log "KernelSU SUSFS patch may need adjustment"
+        cd ..
+    fi
+
+    # Step 4: Copy SUSFS source files to kernel
+    log "Step 4: Copying SUSFS source files..."
+    cp -v susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+    cp -v susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+
+    # Step 5: Copy and apply kernel SUSFS patch
+    log "Step 5: Applying kernel SUSFS patch..."
+    cp susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch ./
+    patch -p1 < 50_add_susfs_in_kernel-4.19.patch || log "Kernel SUSFS patch may need manual adjustment"
+
+    # Step 6: Apply device-specific fixes if available
+    if [ -f "../patches/kona_cos15_a15/susfs_fixed.patch" ]; then
+        log "Step 6: Applying device-specific SUSFS fixes..."
+        patch -p1 < ../patches/kona_cos15_a15/susfs_fixed.patch || log "Device patch may already be applied"
     fi
 
     cd ..
 }
 
-# Apply SUSFS patches
-apply_susfs() {
-    log "Applying SUSFS patches..."
+# Apply VFS hook patches
+apply_vfs_patches() {
+    log "Applying VFS hook patches..."
     cd kernel_source
-
-    # Clone SUSFS patches for kernel 4.19
-    if [ ! -d "susfs4ksu" ]; then
-        git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
-        git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu
+    if [ -f "../patches/vfs_hook_patches.sh" ]; then
+        bash ../patches/vfs_hook_patches.sh || log "VFS patches may already be applied"
     fi
-
-    # Apply kernel patches
-    if [ -d "susfs4ksu/kernel_patches" ]; then
-        log "Applying SUSFS kernel patches..."
-        for patch in susfs4ksu/kernel_patches/*.patch; do
-            if [ -f "$patch" ]; then
-                log "Applying $(basename $patch)..."
-                git apply "$patch" || warn "Patch $(basename $patch) may have already been applied"
-            fi
-        done
-    fi
-
-    # Copy SUSFS source files
-    if [ -d "susfs4ksu/kernel_patches/fs" ]; then
-        cp -r susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
-    fi
-    if [ -d "susfs4ksu/kernel_patches/include" ]; then
-        cp -r susfs4ksu/kernel_patches/include/* include/ 2>/dev/null || true
-    fi
-
-    # Apply KernelSU-Next SUSFS patch
-    log "Downloading KernelSU-Next SUSFS integration patch..."
-    curl -sL "https://raw.githubusercontent.com/wshamroukh/KernelSU-Next-SUSFS-kernelv4.19/legacy/susfs-v2.0.0_kernelsu-next-legacy.patch" -o ksu_susfs.patch
-
-    cd KernelSU-Next
-    git apply ../ksu_susfs.patch || warn "KSU SUSFS patch may have already been applied"
-    cd ..
-
     cd ..
 }
 
@@ -103,7 +148,6 @@ configure_kernel() {
     log "Configuring kernel..."
     cd kernel_source
 
-    # Make defconfig
     make O=out ARCH=arm64 CC=clang \
         CLANG_TRIPLE=aarch64-linux-gnu- \
         CROSS_COMPILE=aarch64-linux-android- \
@@ -112,14 +156,21 @@ configure_kernel() {
 
     # Enable KernelSU
     ./scripts/config --file out/.config -e KSU
-    ./scripts/config --file out/.config -e KSU_SUSFS
-    ./scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
-    ./scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
-    ./scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
-    ./scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT
-    ./scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
-    ./scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
-    ./scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+
+    # Enable SUSFS if enabled
+    if [ "$SUSFS_ENABLED" = "true" ]; then
+        ./scripts/config --file out/.config -e KSU_SUSFS || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG || true
+        ./scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS || true
+    fi
+
+    # Regenerate config
+    make O=out ARCH=arm64 olddefconfig
 
     cd ..
 }
@@ -132,10 +183,13 @@ build_kernel() {
     # Get CPU count
     CPUS=$(nproc --all)
 
-    make -j"$CPUS" O=out ARCH=arm64 CC=clang \
+    # Use 'yes ""' to auto-accept default for any config prompts
+    # LLVM_IAS=0 to use GCC assembler instead of Clang's integrated assembler (vDSO compatibility)
+    yes "" | make -j"$CPUS" O=out ARCH=arm64 CC=clang \
         CLANG_TRIPLE=aarch64-linux-gnu- \
         CROSS_COMPILE=aarch64-linux-android- \
         CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+        LLVM_IAS=0 \
         NM=llvm-nm \
         OBJDUMP=llvm-objdump \
         STRIP=llvm-strip \
@@ -144,15 +198,21 @@ build_kernel() {
     cd ..
 }
 
+# Check build result
+check_build() {
+    cd kernel_source
+    if [ ! -f "out/arch/arm64/boot/Image" ]; then
+        error "Kernel image not found! Build failed."
+    fi
+    log "Kernel built successfully!"
+    ls -la out/arch/arm64/boot/
+    cd ..
+}
+
 # Package kernel with AnyKernel3
 package_kernel() {
     log "Packaging kernel..."
     cd kernel_source
-
-    # Check if kernel was built successfully
-    if [ ! -f "out/arch/arm64/boot/Image" ]; then
-        error "Kernel image not found! Build may have failed."
-    fi
 
     # Clone AnyKernel3
     if [ ! -d "AnyKernel3" ]; then
@@ -167,78 +227,51 @@ package_kernel() {
     cp ../out/arch/arm64/boot/Image .
 
     # Copy DTB if exists
-    if [ -f "../out/arch/arm64/boot/dtb" ]; then
-        cp ../out/arch/arm64/boot/dtb .
-    fi
+    [ -f "../out/arch/arm64/boot/dtb" ] && cp ../out/arch/arm64/boot/dtb .
 
     # Copy DTBO if exists
-    if [ -f "../out/arch/arm64/boot/dtbo.img" ]; then
-        cp ../out/arch/arm64/boot/dtbo.img .
-    fi
+    [ -f "../out/arch/arm64/boot/dtbo.img" ] && cp ../out/arch/arm64/boot/dtbo.img .
 
-    # Update anykernel.sh for OnePlus 8 series
-    cat > anykernel.sh << 'EOF'
-# AnyKernel3 Ramdisk Mod Script
-# osm0sis @ xda-developers
-
-properties() { '
-kernel.string=KernelSU-SUSFS Kernel for OnePlus 8 Series
-do.devicecheck=1
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=instantnoodle
-device.name2=instantnoodlep
-device.name3=kebab
-device.name4=lemonades
-device.name5=OnePlus8
-device.name6=OnePlus8Pro
-device.name7=OnePlus8T
-device.name8=OnePlus9R
-supported.versions=11-15
-supported.patchlevels=
-'; }
-
-block=/dev/block/bootdevice/by-name/boot;
-is_slot_device=1;
-ramdisk_compression=auto;
-
-. tools/ak3-core.sh;
-
-set_perm_recursive 0 0 755 644 $ramdisk/*;
-set_perm_recursive 0 0 750 750 $ramdisk/init* $ramdisk/sbin;
-
-dump_boot;
-write_boot;
-EOF
+    # Configure anykernel.sh for OnePlus 8 series
+    sed -i "s/do.devicecheck=.*/do.devicecheck=1/g" anykernel.sh
+    sed -i "s/do.modules=.*/do.modules=0/g" anykernel.sh
+    sed -i "s/device.name1=.*/device.name1=instantnoodle/g" anykernel.sh
+    sed -i "s/device.name2=.*/device.name2=instantnoodlep/g" anykernel.sh
+    sed -i "s|block=.*|block=/dev/block/bootdevice/by-name/boot;|g" anykernel.sh
+    sed -i "s/is_slot_device=.*/is_slot_device=1;/g" anykernel.sh
 
     # Create flashable zip
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    ZIP_NAME="KernelSU-SUSFS_${DEVICE_NAME}_${TIMESTAMP}.zip"
-    zip -r9 "../out/$ZIP_NAME" * -x .git README.md *placeholder
+    SUSFS_TAG=""
+    [ "$SUSFS_ENABLED" = "true" ] && SUSFS_TAG="_SUSFS"
+    ZIP_NAME="KernelSU-${KERNELSU_VARIANT}${SUSFS_TAG}_${DEVICE_NAME}_${TIMESTAMP}.zip"
+    zip -r9 "/output/$ZIP_NAME" * -x .git README.md *placeholder
 
-    log "Created: out/$ZIP_NAME"
+    log "Created: /output/$ZIP_NAME"
     cd ../..
 
-    # Copy to output
-    mkdir -p /output
-    cp kernel_source/out/*.zip /output/ 2>/dev/null || true
+    # Copy kernel image to output
     cp kernel_source/out/arch/arm64/boot/Image /output/ 2>/dev/null || true
 }
 
 # Main
 main() {
-    log "=== OnePlus SM8250 Kernel Build with KernelSU-Next + SUSFS ==="
+    log "=== OnePlus SM8250 Kernel Build with KernelSU + SUSFS ==="
     log "Kernel Source: $KERNEL_SOURCE"
     log "Branch: $KERNEL_BRANCH"
     log "Defconfig: $DEFCONFIG"
+    log "KernelSU Variant: $KERNELSU_VARIANT"
+    log "SUSFS Enabled: $SUSFS_ENABLED"
+    log ""
 
     clone_kernel
+    clone_patches
     setup_kernelsu
     apply_susfs
+    apply_vfs_patches
     configure_kernel
     build_kernel
+    check_build
     package_kernel
 
     log "=== Build Complete! ==="
