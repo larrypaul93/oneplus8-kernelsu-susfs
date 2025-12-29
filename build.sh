@@ -47,19 +47,13 @@ fix_vdso() {
     cd kernel_source
 
     # Fix vDSO compilation error with Clang + GNU assembler
-    # The issue is Clang generates CFI directives that GNU as doesn't understand
+    # The issue is Clang generates DWARF debug info (.file directives) that GNU as doesn't understand
+    # Solution: Disable debug info generation for vDSO with -g0
     VDSO_MAKEFILE="arch/arm64/kernel/vdso/Makefile"
     if [ -f "$VDSO_MAKEFILE" ]; then
         log "Patching vDSO Makefile..."
-        # Add flag to disable CFI directives that confuse GNU assembler
-        sed -i 's/ccflags-y += -fno-stack-protector/ccflags-y += -fno-stack-protector -fno-asynchronous-unwind-tables/' "$VDSO_MAKEFILE"
-        # If that pattern doesn't exist, try adding it after other ccflags
-        if ! grep -q "fno-asynchronous-unwind-tables" "$VDSO_MAKEFILE"; then
-            sed -i '/^ccflags-y/s/$/ -fno-asynchronous-unwind-tables/' "$VDSO_MAKEFILE"
-        fi
-        # Fallback: append if still not present
-        if ! grep -q "fno-asynchronous-unwind-tables" "$VDSO_MAKEFILE"; then
-            echo 'ccflags-y += -fno-asynchronous-unwind-tables' >> "$VDSO_MAKEFILE"
+        if ! grep -q -- "-g0" "$VDSO_MAKEFILE"; then
+            echo 'ccflags-y += -g0' >> "$VDSO_MAKEFILE"
         fi
         log "vDSO Makefile patched"
     fi
@@ -68,8 +62,8 @@ fix_vdso() {
     VDSO32_MAKEFILE="arch/arm64/kernel/vdso32/Makefile"
     if [ -f "$VDSO32_MAKEFILE" ]; then
         log "Patching vDSO32 Makefile..."
-        if ! grep -q "fno-asynchronous-unwind-tables" "$VDSO32_MAKEFILE"; then
-            echo 'ccflags-y += -fno-asynchronous-unwind-tables' >> "$VDSO32_MAKEFILE"
+        if ! grep -q -- "-g0" "$VDSO32_MAKEFILE"; then
+            echo 'ccflags-y += -g0' >> "$VDSO32_MAKEFILE"
         fi
     fi
 
