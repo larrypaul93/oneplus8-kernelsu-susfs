@@ -141,13 +141,15 @@ jobs:
           if [ -d "susfs4ksu/kernel_patches" ]; then
             echo "Copying SUSFS kernel files..."
             cp -v susfs4ksu/kernel_patches/fs/susfs.c fs/ 2>/dev/null || true
-            cp -v susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || true
             cp -v susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || true
+            cp -v susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || true
+            cp -v susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
             cp -v susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || true
 
             # Add susfs to fs/Makefile if not present
             if ! grep -q "susfs.o" fs/Makefile; then
               echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+              echo 'obj-$(CONFIG_KSU_SUSFS_SUS_SU) += sus_su.o' >> fs/Makefile
             fi
           fi
 
