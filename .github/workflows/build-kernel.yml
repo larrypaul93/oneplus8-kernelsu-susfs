@@ -125,24 +125,31 @@ jobs:
         run: |
           cd kernel
 
-          case "$KERNELSU_VARIANT" in
-            ksu)
-              echo "Setting up original KernelSU (tiann)..."
-              curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-              ;;
-            sukisu)
-              echo "Setting up SukiSU-Ultra..."
-              curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
-              ;;
-            next)
-              echo "Setting up KernelSU-Next (legacy)..."
-              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
-              ;;
-            rsuntk)
-              echo "Setting up rsuntk KernelSU..."
-              curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
-              ;;
-          esac
+          # If SUSFS is enabled, use rsuntk's integrated SUSFS version
+          if [ "$SUSFS_ENABLED" = "true" ]; then
+            echo "Setting up rsuntk KernelSU with integrated SUSFS..."
+            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s susfs-rksu-master
+            echo "KERNELSU_VARIANT=rsuntk-susfs" >> $GITHUB_ENV
+          else
+            case "$KERNELSU_VARIANT" in
+              ksu)
+                echo "Setting up original KernelSU (tiann)..."
+                curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+                ;;
+              sukisu)
+                echo "Setting up SukiSU-Ultra..."
+                curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+                ;;
+              next)
+                echo "Setting up KernelSU-Next (legacy)..."
+                curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
+                ;;
+              rsuntk)
+                echo "Setting up rsuntk KernelSU..."
+                curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
+                ;;
+            esac
+          fi
 
       - name: Fix KernelSU for Kernel 4.19 Compatibility
         run: |
@@ -222,101 +229,38 @@ jobs:
             fi
           fi
 
-      - name: Apply SUSFS Patches
+      - name: Apply SUSFS Kernel Patches
         if: env.SUSFS_ENABLED == 'true'
         run: |
           cd kernel
 
-          # SUSFS requires specific KernelSU integration patches
-          # The susfs4ksu patches (kernel-4.19 branch) are designed for KernelSU with Non-GKI support
-          # v0.9.5 is the last version WITH Non-GKI support (commit 898e9d4f dropped it after v0.9.5)
-          echo "Setting up KernelSU v0.9.5 for SUSFS compatibility..."
-
-          # Remove any existing KernelSU
-          rm -rf KernelSU*
-          rm -rf drivers/kernelsu
-
-          # Clone KernelSU v0.9.5 - the last version WITH Non-GKI support
-          # The commit 898e9d4f dropped Non-GKI support, and v0.9.5 is its parent
-          git clone --depth=1 -b v0.9.5 https://github.com/tiann/KernelSU.git
-
-          # Link drivers/kernelsu
-          ln -sf "$(pwd)/KernelSU/kernel" "$(pwd)/drivers/kernelsu"
-
-          # Add to Makefile if needed
-          if ! grep -q "kernelsu" "drivers/Makefile"; then
-            echo "obj-y += kernelsu/" >> drivers/Makefile
-          fi
-
-          # Update the variant for naming
-          export KERNELSU_VARIANT="ksu-susfs"
-          echo "KERNELSU_VARIANT=ksu-susfs" >> $GITHUB_ENV
-
-          # Find KernelSU directory
-          KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
-          echo "KernelSU directory: $KSU_DIR"
+          # rsuntk's KernelSU with susfs-rksu-master branch has SUSFS integrated
+          # We only need to apply the kernel-side SUSFS patches (fs/susfs.c, etc.)
+          echo "Using rsuntk KernelSU with integrated SUSFS support"
+          echo "Applying kernel-side SUSFS patches..."
 
           # Clone susfs4ksu for kernel patches (kernel-4.19 branch)
           echo "Cloning susfs4ksu (kernel-4.19 branch)..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
           git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu
 
-          # Step 1: No revert needed for v0.9.5
-          # The commit 898e9d4f that dropped Non-GKI support was made AFTER v0.9.5
-          # v0.9.5 already has full Non-GKI support, so we skip the revert step
-          echo "Step 1: Using KernelSU v0.9.5 (has Non-GKI support, no revert needed)"
-
-          # Step 2: Keep kprobes ENABLED for now
-          # KernelSU v0.9.5 uses kprobes for hooks. If kprobes work on this kernel,
-          # we don't need manual VFS hooks. The SUSFS guide suggests disabling kprobes
-          # because SUS_SU isn't supported on Non-GKI, but SUSFS itself can work with kprobes.
-          echo "Step 2: Keeping kprobes enabled - KernelSU will use kprobe hooks"
-          echo "If build fails with kprobe errors, we'll need to disable kprobes and add manual VFS hooks"
-
-          # Step 3: Copy SUSFS patch to KernelSU folder and apply
-          echo "Step 3: Copying and applying SUSFS KernelSU patch..."
-          if [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
-            cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "$KSU_DIR/"
-            cd "$KSU_DIR"
-            patch -p1 < 10_enable_susfs_for_ksu.patch || echo "KernelSU SUSFS patch may need adjustment"
-            cd ..
-          fi
-
-          # Step 4: Copy SUSFS source files to kernel
-          echo "Step 4: Copying SUSFS source files..."
+          # Copy SUSFS source files to kernel
+          echo "Copying SUSFS source files..."
           cp -v susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
           cp -v susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
 
-          # Step 5: Copy and apply kernel SUSFS patch
-          echo "Step 5: Applying kernel SUSFS patch..."
+          # Apply kernel SUSFS patch
+          echo "Applying kernel SUSFS patch..."
           cp susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch ./
           patch -p1 < 50_add_susfs_in_kernel-4.19.patch || echo "Kernel SUSFS patch may need manual adjustment"
 
-          # Step 6: Apply device-specific fixes if available
+          # Apply device-specific fixes if available
           if [ -f "../patches/kona_cos15_a15/susfs_fixed.patch" ]; then
-            echo "Step 6: Applying device-specific SUSFS fixes..."
+            echo "Applying device-specific SUSFS fixes..."
             patch -p1 < ../patches/kona_cos15_a15/susfs_fixed.patch || echo "Device patch may already be applied"
           fi
 
-          # Step 7: Add SUSFS functions and EXPORT_SYMBOL declarations
-          # The SUSFS patch may not apply cleanly to KernelSU v0.9.5
-          # This script adds the missing functions if needed
-          echo "Step 7: Ensuring SUSFS functions are present in selinux.c..."
-          chmod +x $GITHUB_WORKSPACE/add_susfs_functions.sh
-          bash $GITHUB_WORKSPACE/add_susfs_functions.sh "$KSU_DIR/kernel/selinux/selinux.c"
-
-          # Also export ksu_try_umount from core_hook.c (used by susfs.c for SUS_MOUNT)
-          CORE_HOOK_C="$KSU_DIR/kernel/core_hook.c"
-          if [ -f "$CORE_HOOK_C" ]; then
-            if ! grep -q "EXPORT_SYMBOL(ksu_try_umount)" "$CORE_HOOK_C"; then
-              echo "" >> "$CORE_HOOK_C"
-              echo "/* SUSFS export for fs/susfs.c */" >> "$CORE_HOOK_C"
-              echo "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT" >> "$CORE_HOOK_C"
-              echo "EXPORT_SYMBOL(ksu_try_umount);" >> "$CORE_HOOK_C"
-              echo "#endif" >> "$CORE_HOOK_C"
-              echo "Added EXPORT_SYMBOL(ksu_try_umount) to $CORE_HOOK_C"
-            fi
-          fi
+          echo "SUSFS kernel patches applied"
 
       - name: Apply VFS Hook Patches
         run: |
