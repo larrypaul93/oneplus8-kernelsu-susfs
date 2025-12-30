@@ -2,8 +2,9 @@
 set -e
 
 # Configuration - can be overridden via environment variables
-KERNEL_SOURCE="${KERNEL_SOURCE:-https://github.com/JackA1ltman/android_kernel_oneplus_sm8250_los_noksu.git}"
-KERNEL_BRANCH="${KERNEL_BRANCH:-staging}"
+# Using official LineageOS kernel source
+KERNEL_SOURCE="${KERNEL_SOURCE:-https://github.com/LineageOS/android_kernel_oneplus_sm8250.git}"
+KERNEL_BRANCH="${KERNEL_BRANCH:-lineage-21}"
 DEFCONFIG="${DEFCONFIG:-vendor/kona-perf_defconfig}"
 DEVICE_NAME="${DEVICE_NAME:-OnePlus8_Series}"
 KERNELSU_VARIANT="${KERNELSU_VARIANT:-ksu}"
