@@ -319,6 +319,9 @@ jobs:
           # Enable KernelSU
           scripts/config --file out/.config -e KSU
 
+          # Disable broken wireless charging driver (has incomplete struct definitions)
+          scripts/config --file out/.config -d OPLUS_CHG_V1 || true
+
           # Enable SUSFS if enabled
           if [ "$SUSFS_ENABLED" = "true" ]; then
             scripts/config --file out/.config -e KSU_SUSFS || true
