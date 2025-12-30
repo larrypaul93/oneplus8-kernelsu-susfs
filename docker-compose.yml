@@ -11,7 +11,7 @@ services:
     environment:
       # Kernel source configuration - Official LineageOS
       - KERNEL_SOURCE=https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
-      - KERNEL_BRANCH=lineage-21
+      - KERNEL_BRANCH=lineage-23.0
       - DEFCONFIG=vendor/kona-perf_defconfig
       - DEVICE_NAME=OnePlus8_Series
       # KernelSU variant: ksu, sukisu, next, rsuntk
