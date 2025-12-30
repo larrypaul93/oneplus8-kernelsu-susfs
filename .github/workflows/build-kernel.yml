@@ -263,8 +263,8 @@ jobs:
             # Only attempt revert if the commit exists and isn't conflicting
             if git cat-file -e 898e9d4f8ca9b2f46b0c6b36b80a872b5b88d899 2>/dev/null; then
               git revert --no-commit 898e9d4f8ca9b2f46b0c6b36b80a872b5b88d899 2>/dev/null || {
-                echo "Revert created conflict, resetting..."
-                git checkout -- .
+                echo "Revert created conflict, hard resetting..."
+                git reset --hard HEAD
               }
             else
               echo "Commit not found in this KernelSU version, skipping revert"
