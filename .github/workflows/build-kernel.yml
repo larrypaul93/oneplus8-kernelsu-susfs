@@ -354,6 +354,13 @@ jobs:
           echo "Added oplus_stubs.o to Makefile:"
           tail -5 drivers/power/supply/qcom/Makefile
 
+          # Completely disable OPLUS drivers directory to prevent compile errors
+          echo "=== Disabling OPLUS drivers compilation ==="
+          if [ -d "drivers/power/oplus" ]; then
+            echo "# OPLUS drivers disabled - only build stubs" > drivers/power/oplus/Makefile
+            echo "Replaced drivers/power/oplus/Makefile"
+          fi
+
           # Disable OPLUS configs
           scripts/config --file out/.config -d OPLUS_CHG || true
           scripts/config --file out/.config -d OPLUS_CHG_V1 || true
