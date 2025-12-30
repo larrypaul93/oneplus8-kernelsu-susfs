@@ -26,7 +26,7 @@ on:
 env:
   # Official LineageOS kernel source
   KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
-  KERNEL_BRANCH: lineage-23.0
+  KERNEL_BRANCH: lineage-22.2
   DEFCONFIG: vendor/kona-perf_defconfig
   DEVICE_NAME: ${{ github.event.inputs.device_name || 'OnePlus8_Series' }}
   # Default to KernelSU-Next legacy branch for better kernel 4.19 compatibility
