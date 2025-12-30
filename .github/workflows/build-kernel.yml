@@ -150,23 +150,32 @@ jobs:
           KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
           echo "KernelSU directory: $KSU_DIR"
 
-          # Create compatibility header for MODULE_IMPORT_NS (doesn't exist in kernel 4.19)
+          # Create compatibility header for kernel 4.19 (handles multiple missing APIs)
           COMPAT_HEADER="include/linux/ksu_compat.h"
           printf '/* KernelSU compatibility header for kernel 4.19 */\n' > "$COMPAT_HEADER"
           printf '#ifndef _LINUX_KSU_COMPAT_H\n' >> "$COMPAT_HEADER"
           printf '#define _LINUX_KSU_COMPAT_H\n\n' >> "$COMPAT_HEADER"
+          printf '#include <linux/sched/task.h>\n' >> "$COMPAT_HEADER"
+          printf '#include <linux/task_work.h>\n\n' >> "$COMPAT_HEADER"
           printf '/* MODULE_IMPORT_NS was introduced in kernel 5.4 */\n' >> "$COMPAT_HEADER"
           printf '#ifndef MODULE_IMPORT_NS\n' >> "$COMPAT_HEADER"
           printf '#define MODULE_IMPORT_NS(ns)\n' >> "$COMPAT_HEADER"
+          printf '#endif\n\n' >> "$COMPAT_HEADER"
+          printf '/* TWA_RESUME was introduced in kernel 5.7 */\n' >> "$COMPAT_HEADER"
+          printf '/* In 4.19, task_work_add takes bool notify, use true for same effect */\n' >> "$COMPAT_HEADER"
+          printf '#ifndef TWA_RESUME\n' >> "$COMPAT_HEADER"
+          printf '#define TWA_RESUME true\n' >> "$COMPAT_HEADER"
           printf '#endif\n\n' >> "$COMPAT_HEADER"
           printf '#endif /* _LINUX_KSU_COMPAT_H */\n' >> "$COMPAT_HEADER"
           echo "Created compatibility header: $COMPAT_HEADER"
           cat "$COMPAT_HEADER"
 
+          # Add compat header to all KernelSU source files that need kernel 4.19 fixes
           if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
-            echo "Fixing MODULE_IMPORT_NS compatibility..."
+            echo "Adding compatibility header to KernelSU source files..."
             for ksu_file in $(find "$KSU_DIR/kernel" -name "*.c" 2>/dev/null); do
-              if grep -q "MODULE_IMPORT_NS" "$ksu_file"; then
+              # Check if file uses any API that needs compat fixes
+              if grep -qE "MODULE_IMPORT_NS|TWA_RESUME|put_task_struct|task_work_add" "$ksu_file"; then
                 echo "Patching $ksu_file..."
                 if ! grep -q "ksu_compat.h" "$ksu_file"; then
                   sed -i '1i #include <linux/ksu_compat.h>' "$ksu_file"
@@ -176,11 +185,14 @@ jobs:
           fi
 
           if [ -d "drivers/kernelsu" ]; then
+            echo "Adding compatibility header to drivers/kernelsu..."
             for ksu_file in drivers/kernelsu/*.c; do
-              if [ -f "$ksu_file" ] && grep -q "MODULE_IMPORT_NS" "$ksu_file"; then
-                echo "Patching $ksu_file..."
-                if ! grep -q "ksu_compat.h" "$ksu_file"; then
-                  sed -i '1i #include <linux/ksu_compat.h>' "$ksu_file"
+              if [ -f "$ksu_file" ]; then
+                if grep -qE "MODULE_IMPORT_NS|TWA_RESUME|put_task_struct|task_work_add" "$ksu_file"; then
+                  echo "Patching $ksu_file..."
+                  if ! grep -q "ksu_compat.h" "$ksu_file"; then
+                    sed -i '1i #include <linux/ksu_compat.h>' "$ksu_file"
+                  fi
                 fi
               fi
             done
