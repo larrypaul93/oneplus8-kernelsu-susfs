@@ -307,24 +307,57 @@ jobs:
           # Enable KernelSU
           scripts/config --file out/.config -e KSU
 
-          # Disable ENTIRE OPLUS power subsystem to prevent linker errors
-          # The OPLUS charging system is deeply interconnected and has many missing symbols
-          echo "=== Disabling entire OPLUS power subsystem ==="
+          # Create stubs for missing OPLUS symbols that other drivers call
+          # Place in drivers/power/supply/qcom/ which is definitely built
+          echo "=== Creating OPLUS stub functions ==="
+          STUB_FILE="drivers/power/supply/qcom/oplus_stubs.c"
+          echo '// OPLUS stub functions' > "$STUB_FILE"
+          echo '#include <linux/module.h>' >> "$STUB_FILE"
+          echo '#include <linux/types.h>' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'bool oplus_vooc_adapter_update_is_rx_gpio(void) { return false; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(oplus_vooc_adapter_update_is_rx_gpio);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'bool oplus_vooc_adapter_update_is_tx_gpio(void) { return false; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(oplus_vooc_adapter_update_is_tx_gpio);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'int oplus_wpc_set_wrx_en_value(int value) { return 0; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(oplus_wpc_set_wrx_en_value);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'int opchg_set_pd_sdp(int value) { return 0; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(opchg_set_pd_sdp);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'bool oplus_vooc_get_fastchg_started(void) { return false; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(oplus_vooc_get_fastchg_started);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'bool oplus_vooc_get_fastchg_ing(void) { return false; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(oplus_vooc_get_fastchg_ing);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'int oplus_gauge_init(void *chip) { return 0; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(oplus_gauge_init);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'int smblib_write(void *chg, int reg, int val) { return 0; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(smblib_write);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'int smblib_read(void *chg, int reg, int *val) { if (val) *val = 0; return 0; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(smblib_read);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'int smblib_masked_write(void *chg, int reg, int mask, int val) { return 0; }' >> "$STUB_FILE"
+          echo 'EXPORT_SYMBOL(smblib_masked_write);' >> "$STUB_FILE"
+          echo '' >> "$STUB_FILE"
+          echo 'MODULE_LICENSE("GPL");' >> "$STUB_FILE"
+          echo "Created $STUB_FILE:"
+          cat "$STUB_FILE"
 
-          # Disable at Makefile level - replace entire oplus directory Makefile
-          if [ -d "drivers/power/oplus" ]; then
-            echo "Disabling entire OPLUS power driver at Makefile level..."
-            echo "# OPLUS power drivers disabled due to missing symbols" > drivers/power/oplus/Makefile
-          fi
+          # Add stubs to the qcom power supply Makefile
+          echo "obj-y += oplus_stubs.o" >> drivers/power/supply/qcom/Makefile
+          echo "Added oplus_stubs.o to Makefile:"
+          tail -5 drivers/power/supply/qcom/Makefile
 
-          # Also try config-based disabling
+          # Disable OPLUS configs
           scripts/config --file out/.config -d OPLUS_CHG || true
           scripts/config --file out/.config -d OPLUS_CHG_V1 || true
           scripts/config --file out/.config -d OPLUS_CHG_V2 || true
-
-          # Verify config
-          echo "=== Checking OPLUS config status ==="
-          grep -i "OPLUS" out/.config | head -20 || echo "No OPLUS config found"
 
           # Enable SUSFS if enabled
           if [ "$SUSFS_ENABLED" = "true" ]; then
