@@ -298,36 +298,12 @@ jobs:
             patch -p1 < ../patches/kona_cos15_a15/susfs_fixed.patch || echo "Device patch may already be applied"
           fi
 
-          # Step 7: Add EXPORT_SYMBOL for SUSFS functions
-          # fs/susfs.c needs to call functions defined in drivers/kernelsu/selinux/selinux.c
-          # For cross-module linking to work, these functions need to be exported
-          echo "Step 7: Adding EXPORT_SYMBOL for SUSFS functions..."
-          SELINUX_C="$KSU_DIR/kernel/selinux/selinux.c"
-          if [ -f "$SELINUX_C" ]; then
-            # Check if exports are already added
-            if ! grep -q "EXPORT_SYMBOL(susfs_is_current_ksu_domain)" "$SELINUX_C"; then
-              echo "" >> "$SELINUX_C"
-              echo "/* SUSFS symbol exports for fs/susfs.c */" >> "$SELINUX_C"
-              echo "#ifdef CONFIG_KSU_SUSFS" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_is_current_ksu_domain);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_is_current_zygote_domain);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_is_current_init_domain);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_is_sid_equal);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_set_ksu_sid);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_set_zygote_sid);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_set_init_sid);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_get_current_sid);" >> "$SELINUX_C"
-              echo "EXPORT_SYMBOL(susfs_get_sid_from_name);" >> "$SELINUX_C"
-              echo "#endif" >> "$SELINUX_C"
-              echo "Added EXPORT_SYMBOL declarations to $SELINUX_C"
-              tail -15 "$SELINUX_C"
-            else
-              echo "EXPORT_SYMBOL already present in $SELINUX_C"
-            fi
-          else
-            echo "WARNING: $SELINUX_C not found!"
-            find . -name "selinux.c" -path "*/kernelsu/*" | head -5
-          fi
+          # Step 7: Add SUSFS functions and EXPORT_SYMBOL declarations
+          # The SUSFS patch may not apply cleanly to KernelSU v0.9.5
+          # This script adds the missing functions if needed
+          echo "Step 7: Ensuring SUSFS functions are present in selinux.c..."
+          chmod +x $GITHUB_WORKSPACE/add_susfs_functions.sh
+          bash $GITHUB_WORKSPACE/add_susfs_functions.sh "$KSU_DIR/kernel/selinux/selinux.c"
 
           # Also export ksu_try_umount from core_hook.c (used by susfs.c for SUS_MOUNT)
           CORE_HOOK_C="$KSU_DIR/kernel/core_hook.c"
