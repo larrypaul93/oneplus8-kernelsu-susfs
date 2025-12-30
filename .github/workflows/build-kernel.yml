@@ -228,16 +228,17 @@ jobs:
           cd kernel
 
           # SUSFS requires specific KernelSU integration patches
-          # The susfs4ksu patches (kernel-4.19 branch) are designed for older KernelSU
-          # We need to use a compatible KernelSU version (v0.7.x series)
-          echo "Setting up KernelSU v0.7.6 for SUSFS compatibility..."
+          # The susfs4ksu patches (kernel-4.19 branch) are designed for KernelSU with Non-GKI support
+          # v0.9.5 is the last version WITH Non-GKI support (commit 898e9d4f dropped it after v0.9.5)
+          echo "Setting up KernelSU v0.9.5 for SUSFS compatibility..."
 
           # Remove any existing KernelSU
           rm -rf KernelSU*
           rm -rf drivers/kernelsu
 
-          # Clone KernelSU v0.7.6 which is compatible with susfs4ksu kernel-4.19 patches
-          git clone --depth=1 -b v0.7.6 https://github.com/tiann/KernelSU.git
+          # Clone KernelSU v0.9.5 - the last version WITH Non-GKI support
+          # The commit 898e9d4f dropped Non-GKI support, and v0.9.5 is its parent
+          git clone --depth=1 -b v0.9.5 https://github.com/tiann/KernelSU.git
 
           # Link drivers/kernelsu
           ln -sf "$(pwd)/KernelSU/kernel" "$(pwd)/drivers/kernelsu"
@@ -260,22 +261,10 @@ jobs:
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
           git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu
 
-          # Step 1: Apply revert commit in KernelSU (only for original tiann KernelSU)
-          # rsuntk KernelSU may not have this commit or it's already handled
-          echo "Step 1: Reverting kprobe commit in KernelSU (if applicable)..."
-          if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
-            cd "$KSU_DIR"
-            # Only attempt revert if the commit exists and isn't conflicting
-            if git cat-file -e 898e9d4f8ca9b2f46b0c6b36b80a872b5b88d899 2>/dev/null; then
-              git revert --no-commit 898e9d4f8ca9b2f46b0c6b36b80a872b5b88d899 2>/dev/null || {
-                echo "Revert created conflict, hard resetting..."
-                git reset --hard HEAD
-              }
-            else
-              echo "Commit not found in this KernelSU version, skipping revert"
-            fi
-            cd ..
-          fi
+          # Step 1: No revert needed for v0.9.5
+          # The commit 898e9d4f that dropped Non-GKI support was made AFTER v0.9.5
+          # v0.9.5 already has full Non-GKI support, so we skip the revert step
+          echo "Step 1: Using KernelSU v0.9.5 (has Non-GKI support, no revert needed)"
 
           # Step 2: Disable kprobes in KernelSU (replace #ifdef CONFIG_KPROBES with #if defined(CONFIG_KPROBES) && 0)
           echo "Step 2: Disabling kprobes in KernelSU..."
@@ -314,14 +303,12 @@ jobs:
           cd kernel
 
           # KernelSU-Next uses LSM hooks instead of manual VFS patches
-          # SUSFS patches include their own hooks via 50_add_susfs_in_kernel-4.19.patch
-          # The vfs_hook_patches.sh script is buggy and conflicts with SUSFS hooks
+          # For Non-GKI builds (including SUSFS), manual VFS hooks ARE required
+          # See: https://kernelsu.org/guide/how-to-integrate-for-non-gki.html#manually-modify-the-kernel-source
           if [ "$KERNELSU_VARIANT" = "next" ]; then
             echo "Skipping VFS hook patches - KernelSU-Next uses LSM hooks"
-          elif [ "$SUSFS_ENABLED" = "true" ]; then
-            echo "Skipping VFS hook patches - SUSFS patches include their own kernel hooks"
           else
-            echo "Applying VFS hook patches for $KERNELSU_VARIANT..."
+            echo "Applying VFS hook patches for $KERNELSU_VARIANT (required for Non-GKI)..."
             if [ -f "../patches/vfs_hook_patches.sh" ]; then
               bash ../patches/vfs_hook_patches.sh || echo "VFS patches may already be applied"
             fi
