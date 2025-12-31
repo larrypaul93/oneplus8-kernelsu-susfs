@@ -120,6 +120,8 @@ jobs:
           EXPORT_SYMBOL(smblib_read);
           int smblib_masked_write(void *chg, int reg, int mask, int val) { return 0; }
           EXPORT_SYMBOL(smblib_masked_write);
+          int qpnp_is_power_off_charging(void) { return 0; }
+          EXPORT_SYMBOL(qpnp_is_power_off_charging);
           EOFSTUB
           # Add to Makefile
           echo 'obj-y += oplus_stubs.o' >> drivers/soc/oplus/Makefile
