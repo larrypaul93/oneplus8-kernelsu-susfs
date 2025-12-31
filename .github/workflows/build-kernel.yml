@@ -70,6 +70,32 @@ jobs:
           # Fix ion_system_heap.c - NR_IONCACHE_PAGES undefined - comment out these checks
           sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
 
+          # Create stub file for missing OnePlus functions
+          cat > drivers/soc/oplus/oplus_stubs.c << 'EOFSTUB'
+          // Stubs for missing OnePlus functions
+          #include <linux/module.h>
+          void hans_report(int, int, int, char*) {}
+          EXPORT_SYMBOL(hans_report);
+          int get_boot_mode(void) { return 0; }
+          EXPORT_SYMBOL(get_boot_mode);
+          int get_eng_version(void) { return 0; }
+          EXPORT_SYMBOL(get_eng_version);
+          int oplus_daily_build(void) { return 0; }
+          EXPORT_SYMBOL(oplus_daily_build);
+          int kswapd_threads = 1;
+          EXPORT_SYMBOL(kswapd_threads);
+          int oplus_vooc_adapter_update_is_rx_gpio(void) { return 0; }
+          EXPORT_SYMBOL(oplus_vooc_adapter_update_is_rx_gpio);
+          int oplus_vooc_adapter_update_is_tx_gpio(void) { return 0; }
+          EXPORT_SYMBOL(oplus_vooc_adapter_update_is_tx_gpio);
+          int get_project(void) { return 0; }
+          EXPORT_SYMBOL(get_project);
+          int is_confidential(void) { return 0; }
+          EXPORT_SYMBOL(is_confidential);
+          EOFSTUB
+          # Add to Makefile
+          echo 'obj-y += oplus_stubs.o' >> drivers/soc/oplus/Makefile
+
       - name: Setup KernelSU
         run: |
           cd kernel
