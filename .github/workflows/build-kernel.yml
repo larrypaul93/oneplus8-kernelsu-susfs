@@ -57,11 +57,9 @@ jobs:
           # Clone susfs4ksu for kernel patches
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19
 
-          # Copy SUSFS source files to kernel
-          cp susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          cp susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || true
-          cp susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || true
+          # Copy ALL SUSFS source and header files to kernel
+          cp susfs4ksu/kernel_patches/fs/*.c fs/
+          cp susfs4ksu/kernel_patches/include/linux/*.h include/linux/
 
           # Apply kernel patch
           patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
