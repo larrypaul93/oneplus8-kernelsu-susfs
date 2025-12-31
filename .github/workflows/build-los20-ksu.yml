@@ -1,0 +1,91 @@
+name: Build LineageOS 20 Kernel with KernelSU
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
+  KERNEL_BRANCH: lineage-20
+  KERNEL_DEFCONFIG: vendor/kona-perf_defconfig
+  KERNEL_CMDLINE: "ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 O=out"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt install gcc-aarch64-linux-gnu -y
+          sudo apt install gcc-arm-linux-gnueabi -y
+          sudo apt install make python3 libssl-dev build-essential bc bison flex unzip libssl-dev ca-certificates xz-utils mkbootimg cpio device-tree-compiler git p7zip-full -y
+          wget https://github.com/Mandi-Sa/clang-prebuilt_old/releases/download/20220113/amd64-kernel-arm-20220113.7z
+          7z x amd64-kernel-arm-20220113.7z -o./clang/
+
+      - name: Clone Kernel
+        run: |
+          git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_SOURCE kernel
+          cd kernel
+
+      - name: Setup KernelSU
+        run: |
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+          export PATH=$(pwd)/../clang/bin/:$PATH
+          make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang"
+          make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc --all)
+
+      - name: Package
+        run: |
+          cd kernel
+          if [ ! -f "out/arch/arm64/boot/Image" ]; then
+            echo "Build failed!"
+            exit 1
+          fi
+
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cd AnyKernel3
+          rm -rf .git modules patch ramdisk
+          cp ../out/arch/arm64/boot/Image .
+          sed -i 's/do.devicecheck=.*/do.devicecheck=1/g' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=instantnoodlep/g' anykernel.sh
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
+          sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
+
+          ZIP_NAME="KernelSU_LOS20_OnePlus8Pro_$(date +%Y%m%d).zip"
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: los20-ksu-${{ github.run_number }}
+          name: LineageOS 20 KernelSU Build ${{ github.run_number }}
+          files: ${{ env.ZIP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
