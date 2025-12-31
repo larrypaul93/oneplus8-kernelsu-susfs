@@ -92,6 +92,34 @@ jobs:
           EXPORT_SYMBOL(get_project);
           int is_confidential(void) { return 0; }
           EXPORT_SYMBOL(is_confidential);
+          void oplus_wpc_set_wrx_en_value(int a) {}
+          EXPORT_SYMBOL(oplus_wpc_set_wrx_en_value);
+          void opchg_set_pd_sdp(int a) {}
+          EXPORT_SYMBOL(opchg_set_pd_sdp);
+          void black_screen_timer_restart(void) {}
+          EXPORT_SYMBOL(black_screen_timer_restart);
+          void bright_screen_timer_restart(void) {}
+          EXPORT_SYMBOL(bright_screen_timer_restart);
+          int oplus_vooc_get_fastchg_started(void) { return 0; }
+          EXPORT_SYMBOL(oplus_vooc_get_fastchg_started);
+          int oplus_vooc_get_fastchg_ing(void) { return 0; }
+          EXPORT_SYMBOL(oplus_vooc_get_fastchg_ing);
+          int oplus_gauge_init(void *a) { return 0; }
+          EXPORT_SYMBOL(oplus_gauge_init);
+          int get_PCB_Version(void) { return 0; }
+          EXPORT_SYMBOL(get_PCB_Version);
+          void switch_headset_state(int a) {}
+          EXPORT_SYMBOL(switch_headset_state);
+          int opticalfp_irq_handler_register(void *a) { return 0; }
+          EXPORT_SYMBOL(opticalfp_irq_handler_register);
+          int is_project(int a) { return 0; }
+          EXPORT_SYMBOL(is_project);
+          int smblib_write(void *chg, int reg, int val) { return 0; }
+          EXPORT_SYMBOL(smblib_write);
+          int smblib_read(void *chg, int reg, int *val) { return 0; }
+          EXPORT_SYMBOL(smblib_read);
+          int smblib_masked_write(void *chg, int reg, int mask, int val) { return 0; }
+          EXPORT_SYMBOL(smblib_masked_write);
           EOFSTUB
           # Add to Makefile
           echo 'obj-y += oplus_stubs.o' >> drivers/soc/oplus/Makefile
