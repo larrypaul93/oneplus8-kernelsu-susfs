@@ -67,7 +67,7 @@ jobs:
           # NOTE: Device config enables actual OPLUS drivers, so we don't need stubs
           # (Stubs are only needed for defconfig builds which lack OPLUS drivers)
 
-      - name: Backport path_umount (required for kernel < 5.9)
+      - name: Backport path_umount and get_cred_rcu (required for older kernels)
         run: |
           cd kernel
           # path_umount was added in Linux 5.9, need to backport for 4.19
@@ -86,6 +86,24 @@ jobs:
 
           # Add declaration to include/linux/mount.h
           sed -i '/^extern void mnt_set_expiry/i extern int path_umount(struct path *path, int flags);' include/linux/mount.h
+
+          # Backport get_cred_rcu for kernels that don't have it
+          # Add to include/linux/cred.h
+          cat >> include/linux/cred.h << 'EOFCRED'
+
+          /* Backport get_cred_rcu for KernelSU */
+          #ifndef get_cred_rcu
+          static inline const struct cred *get_cred_rcu(const struct cred *cred)
+          {
+              struct cred *nonconst_cred = (struct cred *) cred;
+              if (!cred)
+                  return NULL;
+              if (!atomic_inc_not_zero(&nonconst_cred->usage))
+                  return NULL;
+              return cred;
+          }
+          #endif
+          EOFCRED
 
       - name: Setup KernelSU (mlm-games non-GKI fork)
         run: |
