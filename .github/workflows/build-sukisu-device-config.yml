@@ -21,7 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git curl wget bc bison build-essential flex \
-            libssl-dev libelf-dev python3 cpio zip
+            libssl-dev libelf-dev python3 python3-pip cpio zip
+          pip3 install mkbootimg
 
       - name: Setup Clang
         run: |
@@ -104,6 +105,7 @@ jobs:
             exit 1
           fi
 
+          # Create AnyKernel3 flashable zip
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
           cd AnyKernel3
           rm -rf .git modules patch ramdisk
@@ -116,18 +118,55 @@ jobs:
           ZIP_NAME="SukiSU_DeviceConfig_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          cd ..
 
-      - name: Upload
+          # Create boot.img using mkbootimg
+          # OnePlus 8 Pro (instantnoodlep) uses boot header version 2
+          BOOT_IMG="SukiSU_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+
+          # Create empty ramdisk (actual ramdisk comes from device when flashing)
+          mkdir -p bootimg_tmp
+          cd bootimg_tmp
+          echo "" | cpio -o -H newc > ramdisk.cpio
+          gzip -9 ramdisk.cpio
+
+          # Create boot.img with OnePlus 8 Pro parameters
+          python3 -m mkbootimg \
+            --kernel ../out/arch/arm64/boot/Image \
+            --ramdisk ramdisk.cpio.gz \
+            --pagesize 4096 \
+            --base 0x00000000 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --tags_offset 0x00000100 \
+            --os_version 14.0.0 \
+            --os_patch_level 2024-12 \
+            --header_version 2 \
+            --cmdline "androidboot.hardware=qcom androidboot.console=ttyMSM0 androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=a600000.dwc3 swiotlb=2048 loop.max_part=7 cgroup.memory=nokmem,nosocket reboot=panic_warm" \
+            --output "$GITHUB_WORKSPACE/$BOOT_IMG"
+
+          echo "BOOT_IMG=$BOOT_IMG" >> $GITHUB_ENV
+          echo "Created boot.img: $BOOT_IMG"
+
+      - name: Upload AnyKernel3 ZIP
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
+
+      - name: Upload boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BOOT_IMG }}
+          path: ${{ env.BOOT_IMG }}
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: sukisu-device-config-${{ github.run_number }}
           name: SukiSU Device Config Build ${{ github.run_number }}
-          files: ${{ env.ZIP_NAME }}
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.BOOT_IMG }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

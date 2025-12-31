@@ -67,11 +67,12 @@ jobs:
           # NOTE: Device config enables actual OPLUS drivers, so we don't need stubs
           # (Stubs are only needed for defconfig builds which lack OPLUS drivers)
 
-      - name: Setup KernelSU (rsuntk non-GKI fork)
+      - name: Setup KernelSU (mlm-games non-GKI fork)
         run: |
           cd kernel
-          # Use rsuntk's KernelSU fork which supports non-GKI kernels (4.4-4.19)
-          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -
+          # Use mlm-games KernelSU-Non-GKI fork - has proper kernel version guards
+          # and doesn't have pkg_observer.c (avoids fsnotify API issues on 4.19)
+          curl -LSs "https://raw.githubusercontent.com/mlm-games/KernelSU-Non-GKI/main/kernel/setup.sh" | bash -
 
       - name: Use Device Config
         run: |
