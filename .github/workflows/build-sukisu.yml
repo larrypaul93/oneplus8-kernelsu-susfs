@@ -67,6 +67,9 @@ jobs:
           # Add smb5-lib.h include to schgm-flash.c
           sed -i '/#include "schgm-flash.h"/a #include "smb5-lib.h"' drivers/power/supply/qcom/schgm-flash.c || true
 
+          # Fix ion_system_heap.c - NR_IONCACHE_PAGES undefined
+          sed -i '1i #ifndef NR_IONCACHE_PAGES\n#define NR_IONCACHE_PAGES NR_KERNEL_MISC_RECLAIMABLE\n#endif' drivers/staging/android/ion/ion_system_heap.c || true
+
       - name: Setup SukiSU-Ultra
         run: |
           cd kernel
