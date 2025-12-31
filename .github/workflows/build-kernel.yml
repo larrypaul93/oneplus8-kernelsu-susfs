@@ -1,40 +1,12 @@
-name: Build LineageOS OnePlus 8 Kernel with KernelSU + SUSFS
+name: Build LineageOS Kernel with KernelSU + SUSFS
 
 on:
   workflow_dispatch:
-    inputs:
-      kernelsu_variant:
-        description: 'KernelSU variant (next legacy recommended for kernel 4.19)'
-        required: true
-        default: 'next'
-        type: choice
-        options:
-          - next
-          - rsuntk
-          - ksu
-          - sukisu
-      susfs_enabled:
-        description: 'Enable SUSFS'
-        required: true
-        default: true
-        type: boolean
-      device_name:
-        description: 'Device name for zip'
-        required: true
-        default: 'OnePlus8_Series'
 
 env:
-  # Official LineageOS kernel source
   KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
   KERNEL_BRANCH: lineage-23.0
   DEFCONFIG: vendor/kona-perf_defconfig
-  DEVICE_NAME: ${{ github.event.inputs.device_name || 'OnePlus8_Series' }}
-  # Default to KernelSU-Next legacy branch for better kernel 4.19 compatibility
-  KERNELSU_VARIANT: ${{ github.event.inputs.kernelsu_variant || 'next' }}
-  SUSFS_ENABLED: ${{ github.event.inputs.susfs_enabled || 'true' }}
-  # Patches repo
-  PATCHES_REPO: JackA1ltman/NonGKI_Kernel_Patches
-  PATCHES_BRANCH: op_kernel
 
 jobs:
   build:
@@ -46,306 +18,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: false
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
-
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git curl wget bc bison build-essential ccache flex \
-            g++-multilib gcc-multilib gnupg gperf imagemagick \
-            lib32ncurses-dev lib32z1-dev \
-            liblz4-tool libncurses-dev libssl-dev \
-            libxml2 libxml2-utils lzop pngcrush rsync schedtool \
-            squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip \
-            cpio kmod libelf-dev device-tree-compiler jq
+          sudo apt-get install -y git curl wget bc bison build-essential flex \
+            libssl-dev libelf-dev python3 cpio zip
 
-      - name: Setup Clang Toolchain
+      - name: Setup Clang
         run: |
-          mkdir -p $GITHUB_WORKSPACE/toolchains/clang
-          # Using Clang 14 for better kernel 4.19 compatibility
+          mkdir -p toolchains/clang
           curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20250704-release/Clang-14.0.6-20250704.tar.gz" | \
-            tar -xzf - -C $GITHUB_WORKSPACE/toolchains/clang
+            tar -xzf - -C toolchains/clang
           echo "$GITHUB_WORKSPACE/toolchains/clang/bin" >> $GITHUB_PATH
 
-      - name: Setup GCC Toolchains
+      - name: Setup GCC
         run: |
           git clone --depth=1 -b android12L-release \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
-            $GITHUB_WORKSPACE/toolchains/gcc64
+            toolchains/gcc64
           git clone --depth=1 -b android12L-release \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
-            $GITHUB_WORKSPACE/toolchains/gcc32
+            toolchains/gcc32
           echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_PATH
           echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_PATH
 
-      - name: Clone Kernel Source
+      - name: Clone Kernel
         run: |
           git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_SOURCE kernel
 
-      - name: Fix LineageOS 23 Kernel Bugs
+      - name: Setup KernelSU with SUSFS
         run: |
           cd kernel
+          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s susfs-rksu-master
 
-          # Fix qpnp-power-on.c bug - missing log_kpd_event member in struct qpnp_pon
-          # Add the missing member to the struct definition
-          QPNP_HEADER="include/linux/input/qpnp-power-on.h"
-          if [ -f "$QPNP_HEADER" ]; then
-            echo "Fixing qpnp-power-on.h - adding missing log_kpd_event member..."
-            # Add log_kpd_event bool to struct qpnp_pon if not present
-            if ! grep -q "log_kpd_event" "$QPNP_HEADER"; then
-              sed -i '/struct qpnp_pon {/,/};/{
-                /bool.*kpdpwr_dbc_enable/a\	bool log_kpd_event;
-              }' "$QPNP_HEADER" || true
-            fi
-          fi
-
-          # Alternative fix: check driver file directly
-          QPNP_DRIVER="drivers/input/misc/qpnp-power-on.c"
-          if [ -f "$QPNP_DRIVER" ] && grep -q "pon->log_kpd_event" "$QPNP_DRIVER"; then
-            echo "Checking if log_kpd_event needs to be added to local struct..."
-            # Find the struct qpnp_pon in the driver and add the member if missing
-            if ! grep -q "bool log_kpd_event" "$QPNP_DRIVER"; then
-              # Comment out the log_kpd_event usage as a workaround
-              sed -i 's/if (pon->log_kpd_event/if (0 \&\& pon->log_kpd_event/g' "$QPNP_DRIVER"
-              sed -i 's/pon->log_kpd_event = of_property_read_bool/\/\/ pon->log_kpd_event = of_property_read_bool/g' "$QPNP_DRIVER"
-              echo "Disabled log_kpd_event references as workaround"
-            fi
-          fi
-
-      - name: Fix vDSO Compilation for Clang
+      - name: Build Kernel
         run: |
           cd kernel
-          # Fix vDSO compilation error with Clang + GNU assembler
-          # The issue is Clang generates DWARF debug info (.file directives) that GNU as doesn't understand
-          # Solution: Disable debug info generation for vDSO with -g0
-          VDSO_MAKEFILE="arch/arm64/kernel/vdso/Makefile"
-          if [ -f "$VDSO_MAKEFILE" ]; then
-            echo "Patching vDSO Makefile for Clang compatibility..."
-            # Disable debug info generation which causes .file directive issues
-            if ! grep -q -- "-g0" "$VDSO_MAKEFILE"; then
-              echo 'ccflags-y += -g0' >> "$VDSO_MAKEFILE"
-            fi
-            echo "vDSO Makefile after patching:"
-            cat "$VDSO_MAKEFILE"
-          fi
-
-          # Also patch vdso32 if it exists
-          VDSO32_MAKEFILE="arch/arm64/kernel/vdso32/Makefile"
-          if [ -f "$VDSO32_MAKEFILE" ]; then
-            echo "Patching vDSO32 Makefile..."
-            if ! grep -q -- "-g0" "$VDSO32_MAKEFILE"; then
-              echo 'ccflags-y += -g0' >> "$VDSO32_MAKEFILE"
-            fi
-          fi
-
-      - name: Clone Patches Repo
-        run: |
-          git clone --depth=1 -b $PATCHES_BRANCH https://github.com/$PATCHES_REPO.git patches
-
-      - name: Setup KernelSU
-        run: |
-          cd kernel
-
-          # If SUSFS is enabled, use rsuntk's integrated SUSFS version
-          if [ "$SUSFS_ENABLED" = "true" ]; then
-            echo "Setting up rsuntk KernelSU with integrated SUSFS..."
-            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s susfs-rksu-master
-            echo "KERNELSU_VARIANT=rsuntk-susfs" >> $GITHUB_ENV
-          else
-            case "$KERNELSU_VARIANT" in
-              ksu)
-                echo "Setting up original KernelSU (tiann)..."
-                curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-                ;;
-              sukisu)
-                echo "Setting up SukiSU-Ultra..."
-                curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
-                ;;
-              next)
-                echo "Setting up KernelSU-Next (legacy)..."
-                curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
-                ;;
-              rsuntk)
-                echo "Setting up rsuntk KernelSU..."
-                curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
-                ;;
-            esac
-          fi
-
-      - name: Fix KernelSU for Kernel 4.19 Compatibility
-        run: |
-          cd kernel
-
-          KSU_DIR=$(find . -maxdepth 1 -type d -name "KernelSU*" | head -1)
-          echo "KernelSU directory: $KSU_DIR"
-
-          # Create compatibility header for kernel 4.19 (handles multiple missing APIs)
-          COMPAT_HEADER="include/linux/ksu_compat.h"
-          printf '/* KernelSU compatibility header for kernel 4.19 */\n' > "$COMPAT_HEADER"
-          printf '#ifndef _LINUX_KSU_COMPAT_H\n' >> "$COMPAT_HEADER"
-          printf '#define _LINUX_KSU_COMPAT_H\n\n' >> "$COMPAT_HEADER"
-          printf '#include <linux/sched/task.h>\n' >> "$COMPAT_HEADER"
-          printf '#include <linux/task_work.h>\n\n' >> "$COMPAT_HEADER"
-          printf '/* MODULE_IMPORT_NS was introduced in kernel 5.4 */\n' >> "$COMPAT_HEADER"
-          printf '#ifndef MODULE_IMPORT_NS\n' >> "$COMPAT_HEADER"
-          printf '#define MODULE_IMPORT_NS(ns)\n' >> "$COMPAT_HEADER"
-          printf '#endif\n\n' >> "$COMPAT_HEADER"
-          printf '/* TWA_RESUME was introduced in kernel 5.7 */\n' >> "$COMPAT_HEADER"
-          printf '/* In 4.19, task_work_add takes bool notify, use true for same effect */\n' >> "$COMPAT_HEADER"
-          printf '#ifndef TWA_RESUME\n' >> "$COMPAT_HEADER"
-          printf '#define TWA_RESUME true\n' >> "$COMPAT_HEADER"
-          printf '#endif\n\n' >> "$COMPAT_HEADER"
-          printf '#endif /* _LINUX_KSU_COMPAT_H */\n' >> "$COMPAT_HEADER"
-          echo "Created compatibility header: $COMPAT_HEADER"
-          cat "$COMPAT_HEADER"
-
-          # Create linux/pgtable.h compatibility header (header moved from asm/ to linux/ in 5.8)
-          PGTABLE_HEADER="include/linux/pgtable.h"
-          if [ ! -f "$PGTABLE_HEADER" ]; then
-            echo "Creating pgtable.h compatibility header..."
-            printf '/* Compatibility header for kernel 4.19 */\n' > "$PGTABLE_HEADER"
-            printf '/* linux/pgtable.h was introduced in kernel 5.8 */\n' >> "$PGTABLE_HEADER"
-            printf '/* In earlier kernels, use asm/pgtable.h instead */\n' >> "$PGTABLE_HEADER"
-            printf '#ifndef _LINUX_PGTABLE_H\n' >> "$PGTABLE_HEADER"
-            printf '#define _LINUX_PGTABLE_H\n' >> "$PGTABLE_HEADER"
-            printf '#include <asm/pgtable.h>\n' >> "$PGTABLE_HEADER"
-            printf '#endif\n' >> "$PGTABLE_HEADER"
-            echo "Created $PGTABLE_HEADER"
-            cat "$PGTABLE_HEADER"
-          fi
-
-          # Add compat header to all KernelSU source files that need kernel 4.19 fixes
-          if [ -n "$KSU_DIR" ] && [ -d "$KSU_DIR" ]; then
-            echo "Adding compatibility header to KernelSU source files..."
-            for ksu_file in $(find "$KSU_DIR/kernel" -name "*.c" 2>/dev/null); do
-              # Check if file uses any API that needs compat fixes
-              if grep -qE "MODULE_IMPORT_NS|TWA_RESUME|put_task_struct|task_work_add" "$ksu_file"; then
-                echo "Patching $ksu_file..."
-                if ! grep -q "ksu_compat.h" "$ksu_file"; then
-                  sed -i '1i #include <linux/ksu_compat.h>' "$ksu_file"
-                fi
-              fi
-            done
-          fi
-
-          if [ -d "drivers/kernelsu" ]; then
-            echo "Adding compatibility header to drivers/kernelsu..."
-            for ksu_file in drivers/kernelsu/*.c; do
-              if [ -f "$ksu_file" ]; then
-                if grep -qE "MODULE_IMPORT_NS|TWA_RESUME|put_task_struct|task_work_add" "$ksu_file"; then
-                  echo "Patching $ksu_file..."
-                  if ! grep -q "ksu_compat.h" "$ksu_file"; then
-                    sed -i '1i #include <linux/ksu_compat.h>' "$ksu_file"
-                  fi
-                fi
-              fi
-            done
-          fi
-
-          if grep -q "ksu_handle_execveat" fs/exec.c 2>/dev/null; then
-            echo "Found KernelSU hooks in fs/exec.c"
-            if ! grep -q "ksu.h" fs/exec.c; then
-              echo "Adding KernelSU include..."
-              sed -i '/#include <linux\/fs.h>/a #include <linux/ksu.h>' fs/exec.c || true
-            fi
-          fi
-
-      - name: Apply SUSFS Kernel Patches
-        if: env.SUSFS_ENABLED == 'true'
-        run: |
-          cd kernel
-
-          # rsuntk's KernelSU with susfs-rksu-master branch has SUSFS integrated
-          # We only need to apply the kernel-side SUSFS patches (fs/susfs.c, etc.)
-          echo "Using rsuntk KernelSU with integrated SUSFS support"
-          echo "Applying kernel-side SUSFS patches..."
-
-          # Clone susfs4ksu for kernel patches (kernel-4.19 branch)
-          echo "Cloning susfs4ksu (kernel-4.19 branch)..."
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
-          git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu
-
-          # List what's in the kernel patches directory
-          echo "=== susfs4ksu kernel_patches contents ==="
-          ls -la susfs4ksu/kernel_patches/ || true
-          ls -la susfs4ksu/kernel_patches/fs/ || true
-          ls -la susfs4ksu/kernel_patches/include/linux/ || true
-
-          # Copy SUSFS source files to kernel - be explicit about paths
-          echo "Copying SUSFS source files..."
-          mkdir -p include/linux
-
-          # Copy fs files
-          if [ -d "susfs4ksu/kernel_patches/fs" ]; then
-            cp -v susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
-            cp -v susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || true
-          fi
-
-          # Copy include files - this is critical for INODE_STATE_SUS_KSTAT
-          if [ -d "susfs4ksu/kernel_patches/include/linux" ]; then
-            cp -v susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
-            cp -v susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || true
-          fi
-
-          # Verify the header was copied and contains the needed definition
-          echo "=== Checking for INODE_STATE_SUS_KSTAT in susfs.h ==="
-          if [ -f "include/linux/susfs.h" ]; then
-            grep -n "INODE_STATE_SUS_KSTAT" include/linux/susfs.h || echo "WARNING: INODE_STATE_SUS_KSTAT not found in susfs.h"
-            head -50 include/linux/susfs.h
-          else
-            echo "ERROR: include/linux/susfs.h not found!"
-            # Try to find susfs.h anywhere in susfs4ksu
-            find susfs4ksu -name "susfs.h" -exec echo "Found: {}" \; -exec head -50 {} \;
-          fi
-
-          # Apply kernel SUSFS patch
-          echo "Applying kernel SUSFS patch..."
-          cp susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch ./
-          patch -p1 < 50_add_susfs_in_kernel-4.19.patch || echo "Kernel SUSFS patch may need manual adjustment"
-
-          # Apply device-specific fixes if available
-          if [ -f "../patches/kona_cos15_a15/susfs_fixed.patch" ]; then
-            echo "Applying device-specific SUSFS fixes..."
-            patch -p1 < ../patches/kona_cos15_a15/susfs_fixed.patch || echo "Device patch may already be applied"
-          fi
-
-          echo "SUSFS kernel patches applied"
-
-      - name: Apply VFS Hook Patches
-        run: |
-          cd kernel
-
-          # KernelSU-Next uses LSM hooks instead of manual VFS patches
-          # SUSFS builds use KernelSU v0.9.5 which has its own hook system
-          # Standard non-GKI builds need the VFS hook patches
-          if [ "$KERNELSU_VARIANT" = "next" ]; then
-            echo "Skipping VFS hook patches - KernelSU-Next uses LSM hooks"
-          elif [ "$SUSFS_ENABLED" = "true" ]; then
-            echo "Skipping VFS hook patches for SUSFS build - using KernelSU v0.9.5 kprobe hooks"
-            echo "Note: KernelSU v0.9.5 uses kprobes for hooks, kprobes were disabled for SUSFS compatibility"
-            echo "The SUSFS patches provide their own kernel integration"
-          else
-            echo "Applying VFS hook patches for $KERNELSU_VARIANT (required for Non-GKI)..."
-            if [ -f "../patches/vfs_hook_patches.sh" ]; then
-              bash ../patches/vfs_hook_patches.sh || echo "VFS patches may already be applied"
-            fi
-          fi
-
-      - name: Configure Kernel
-        run: |
-          cd kernel
-
-          export ARCH=arm64
-          export SUBARCH=arm64
 
           make O=out ARCH=arm64 CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -353,172 +61,49 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             $DEFCONFIG
 
-          # Enable KernelSU
           scripts/config --file out/.config -e KSU
-
-          # Create stubs for missing OPLUS symbols that other drivers call
-          # Place in drivers/power/supply/qcom/ which is definitely built
-          echo "=== Creating OPLUS stub functions ==="
-          STUB_FILE="drivers/power/supply/qcom/oplus_stubs.c"
-          echo '// OPLUS stub functions' > "$STUB_FILE"
-          echo '#include <linux/module.h>' >> "$STUB_FILE"
-          echo '#include <linux/types.h>' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'bool oplus_vooc_adapter_update_is_rx_gpio(void) { return false; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(oplus_vooc_adapter_update_is_rx_gpio);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'bool oplus_vooc_adapter_update_is_tx_gpio(void) { return false; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(oplus_vooc_adapter_update_is_tx_gpio);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'int oplus_wpc_set_wrx_en_value(int value) { return 0; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(oplus_wpc_set_wrx_en_value);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'int opchg_set_pd_sdp(int value) { return 0; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(opchg_set_pd_sdp);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'bool oplus_vooc_get_fastchg_started(void) { return false; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(oplus_vooc_get_fastchg_started);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'bool oplus_vooc_get_fastchg_ing(void) { return false; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(oplus_vooc_get_fastchg_ing);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'int oplus_gauge_init(void *chip) { return 0; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(oplus_gauge_init);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'int smblib_write(void *chg, int reg, int val) { return 0; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(smblib_write);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'int smblib_read(void *chg, int reg, int *val) { if (val) *val = 0; return 0; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(smblib_read);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'int smblib_masked_write(void *chg, int reg, int mask, int val) { return 0; }' >> "$STUB_FILE"
-          echo 'EXPORT_SYMBOL(smblib_masked_write);' >> "$STUB_FILE"
-          echo '' >> "$STUB_FILE"
-          echo 'MODULE_LICENSE("GPL");' >> "$STUB_FILE"
-          echo "Created $STUB_FILE:"
-          cat "$STUB_FILE"
-
-          # Add stubs to the qcom power supply Makefile
-          echo "obj-y += oplus_stubs.o" >> drivers/power/supply/qcom/Makefile
-          echo "Added oplus_stubs.o to Makefile:"
-          tail -5 drivers/power/supply/qcom/Makefile
-
-          # Completely disable OPLUS drivers directory to prevent compile errors
-          echo "=== Disabling OPLUS drivers compilation ==="
-          if [ -d "drivers/power/oplus" ]; then
-            echo "# OPLUS drivers disabled - only build stubs" > drivers/power/oplus/Makefile
-            echo "Replaced drivers/power/oplus/Makefile"
-          fi
-
-          # Disable OPLUS configs
-          scripts/config --file out/.config -d OPLUS_CHG || true
-          scripts/config --file out/.config -d OPLUS_CHG_V1 || true
-          scripts/config --file out/.config -d OPLUS_CHG_V2 || true
-
-          # Enable SUSFS if enabled
-          if [ "$SUSFS_ENABLED" = "true" ]; then
-            scripts/config --file out/.config -e KSU_SUSFS || true
-            scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH || true
-            scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT || true
-            scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT || true
-            scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT || true
-            scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME || true
-            scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG || true
-            scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS || true
-          fi
-
-          # Regenerate config
+          scripts/config --file out/.config -e KSU_SUSFS
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Build Kernel
-        run: |
-          cd kernel
-
-          # Use LLVM_IAS=1 to use Clang's integrated assembler
-          # This properly handles DWARF debug info that GNU as doesn't understand
           make -j$(nproc --all) O=out ARCH=arm64 CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            2>&1 | tee build.log
+            LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
-      - name: Check Build Result
+      - name: Package
         run: |
           cd kernel
           if [ ! -f "out/arch/arm64/boot/Image" ]; then
-            echo "======== BUILD FAILED ========"
-            echo "Last 200 lines of build log:"
-            tail -200 build.log
+            echo "Build failed!"
             exit 1
           fi
-          echo "Kernel built successfully!"
-          ls -la out/arch/arm64/boot/
 
-      - name: Package with AnyKernel3
-        run: |
-          cd kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
           cd AnyKernel3
           rm -rf .git modules patch ramdisk
           cp ../out/arch/arm64/boot/Image .
-          [ -f "../out/arch/arm64/boot/dtb" ] && cp ../out/arch/arm64/boot/dtb .
-          [ -f "../out/arch/arm64/boot/dtbo.img" ] && cp ../out/arch/arm64/boot/dtbo.img .
-          sed -i "s/do.devicecheck=.*/do.devicecheck=1/g" anykernel.sh
-          sed -i "s/do.modules=.*/do.modules=0/g" anykernel.sh
-          sed -i "s/device.name1=.*/device.name1=instantnoodle/g" anykernel.sh
-          sed -i "s/device.name2=.*/device.name2=instantnoodlep/g" anykernel.sh
-          sed -i "s|block=.*|block=/dev/block/bootdevice/by-name/boot;|g" anykernel.sh
-          sed -i "s/is_slot_device=.*/is_slot_device=1;/g" anykernel.sh
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          SUSFS_TAG=""
-          [ "$SUSFS_ENABLED" = "true" ] && SUSFS_TAG="_SUSFS"
-          ZIP_NAME="KernelSU-${KERNELSU_VARIANT}${SUSFS_TAG}_${DEVICE_NAME}_${TIMESTAMP}.zip"
+          sed -i 's/do.devicecheck=.*/do.devicecheck=1/g' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=instantnoodlep/g' anykernel.sh
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
+          sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
+
+          ZIP_NAME="KernelSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
 
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}
-          name: KernelSU Build ${{ github.run_number }}
-          body: |
-            ## OnePlus 8 Series Kernel Build
-
-            **Kernel Source:** ${{ env.KERNEL_SOURCE }}
-            **Branch:** ${{ env.KERNEL_BRANCH }}
-            **KernelSU Variant:** ${{ env.KERNELSU_VARIANT }}
-            **SUSFS:** ${{ env.SUSFS_ENABLED }}
-
-            ### Supported Devices
-            - OnePlus 8 (instantnoodle)
-            - OnePlus 8 Pro (instantnoodlep)
-            - OnePlus 8T (kebab)
-            - OnePlus 9R (lemonades)
-
-            ### Installation
-            1. Boot to TWRP/custom recovery
-            2. Flash the zip file
-            3. Reboot
-
-            Or use fastboot:
-            ```
-            fastboot flash boot boot.img
-            ```
+          name: KernelSU + SUSFS Build ${{ github.run_number }}
           files: ${{ env.ZIP_NAME }}
-          draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
