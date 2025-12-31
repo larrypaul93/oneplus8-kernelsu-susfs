@@ -130,8 +130,17 @@ jobs:
       - name: Fix KernelSU for OPLUS
         run: |
           cd kernel
-          # Add forward declaration for get_cached_platform_id in ksu.c to fix compilation
-          sed -i '1i extern int get_cached_platform_id(void);' drivers/kernelsu/ksu.c
+          # Add fallback for MODULE_IMPORT_NS macro (not available in kernel 4.19)
+          # and forward declaration for get_cached_platform_id
+          cat > /tmp/ksu_fix.h << 'EOFKSU'
+          #ifndef MODULE_IMPORT_NS
+          #define MODULE_IMPORT_NS(ns)
+          #endif
+          extern int get_cached_platform_id(void);
+          EOFKSU
+          sed -i 's/^          //' /tmp/ksu_fix.h
+          cat /tmp/ksu_fix.h drivers/kernelsu/ksu.c > /tmp/ksu.c.tmp
+          mv /tmp/ksu.c.tmp drivers/kernelsu/ksu.c
 
       - name: Use Device Config
         run: |
