@@ -79,7 +79,10 @@ jobs:
           #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
           int path_umount(struct path *path, int flags)
           {
-              return do_umount(path->mnt, flags);
+              /* do_umount expects struct mount*, not struct vfsmount* */
+              /* Use real_mount() macro to convert vfsmount to mount */
+              struct mount *mnt = real_mount(path->mnt);
+              return do_umount(mnt, flags);
           }
           EXPORT_SYMBOL(path_umount);
           #endif

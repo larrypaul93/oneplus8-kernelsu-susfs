@@ -29,29 +29,6 @@ jobs:
           chmod +x mkbootimg/*.py
           echo "$GITHUB_WORKSPACE/mkbootimg" >> $GITHUB_PATH
 
-      - name: Download LineageOS boot.img for ramdisk
-        run: |
-          # Get latest LineageOS build info for instantnoodlep
-          BUILD_URL=$(curl -s "https://download.lineageos.org/api/v2/devices/instantnoodlep/builds" | \
-            python3 -c "import sys,json; builds=json.load(sys.stdin); print(builds[0]['url'] if builds else '')")
-
-          if [ -n "$BUILD_URL" ]; then
-            echo "Downloading LineageOS build to extract boot.img..."
-            wget -q "$BUILD_URL" -O lineageos.zip
-
-            # Extract boot.img from the zip
-            unzip -q lineageos.zip boot.img -d .
-
-            # Unpack boot.img to get ramdisk
-            mkdir -p boot_extracted
-            python3 mkbootimg/unpack_bootimg.py --boot_img boot.img --out boot_extracted
-
-            echo "Extracted ramdisk from LineageOS boot.img"
-            ls -la boot_extracted/
-          else
-            echo "Could not get LineageOS build URL, will create minimal boot.img"
-          fi
-
       - name: Setup Clang
         run: |
           mkdir -p toolchains/clang
@@ -152,46 +129,28 @@ jobs:
           cd kernel
           BOOT_IMG="SukiSU_boot_OnePlus8Pro_$(date +%Y%m%d).img"
 
-          if [ -f "$GITHUB_WORKSPACE/boot_extracted/ramdisk" ]; then
-            echo "Creating boot.img with LineageOS ramdisk..."
+          # Use pre-extracted ramdisk and dtb from repo (extracted from LineageOS boot.img)
+          # Compress ramdisk with lz4_legacy format (same as original boot.img)
+          lz4 -l -12 --favor-decSpeed "$GITHUB_WORKSPACE/lineage-os/ramdisk.cpio" ramdisk.cpio.lz4
 
-            # Read boot params from extracted boot
-            CMDLINE=$(cat "$GITHUB_WORKSPACE/boot_extracted/cmdline" 2>/dev/null || echo "")
+          # Create boot.img with LineageOS ramdisk and dtb
+          python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
+            --kernel out/arch/arm64/boot/Image \
+            --ramdisk ramdisk.cpio.lz4 \
+            --dtb "$GITHUB_WORKSPACE/lineage-os/dtb" \
+            --pagesize 4096 \
+            --base 0x00000000 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --tags_offset 0x00000100 \
+            --dtb_offset 0x01f00000 \
+            --header_version 2 \
+            --os_version 16.0.0 \
+            --os_patch_level 2025-12 \
+            --cmdline "androidboot.hardware=qcom androidboot.memcg=1 androidboot.usbcontroller=a600000.dwc3 cgroup.memory=nokmem,nosocket loop.max_part=7 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 reboot=panic_warm service_locator.enable=1 swiotlb=2048" \
+            --output "$GITHUB_WORKSPACE/$BOOT_IMG"
 
-            python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
-              --kernel out/arch/arm64/boot/Image \
-              --ramdisk "$GITHUB_WORKSPACE/boot_extracted/ramdisk" \
-              --pagesize 4096 \
-              --base 0x00000000 \
-              --kernel_offset 0x00008000 \
-              --ramdisk_offset 0x01000000 \
-              --tags_offset 0x00000100 \
-              --header_version 2 \
-              --os_version 14.0.0 \
-              --os_patch_level 2024-12 \
-              --cmdline "${CMDLINE:-androidboot.hardware=qcom}" \
-              --output "$GITHUB_WORKSPACE/$BOOT_IMG"
-
-            echo "Created boot.img with proper ramdisk"
-          else
-            echo "No LineageOS ramdisk found, creating kernel-only boot.img"
-            # Create minimal ramdisk
-            mkdir -p tmp_ramdisk
-            echo "" | cpio -o -H newc > tmp_ramdisk/ramdisk.cpio
-            gzip -9 tmp_ramdisk/ramdisk.cpio
-
-            python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
-              --kernel out/arch/arm64/boot/Image \
-              --ramdisk tmp_ramdisk/ramdisk.cpio.gz \
-              --pagesize 4096 \
-              --base 0x00000000 \
-              --kernel_offset 0x00008000 \
-              --ramdisk_offset 0x01000000 \
-              --tags_offset 0x00000100 \
-              --cmdline "androidboot.hardware=qcom" \
-              --output "$GITHUB_WORKSPACE/$BOOT_IMG"
-          fi
-
+          echo "Created boot.img with LineageOS ramdisk and dtb"
           echo "BOOT_IMG=$BOOT_IMG" >> $GITHUB_ENV
           ls -lh "$GITHUB_WORKSPACE/$BOOT_IMG"
 
