@@ -71,10 +71,11 @@ jobs:
         run: |
           cd kernel
           # path_umount was added in Linux 5.9, need to backport for 4.19
-          # Add the function to fs/namespace.c
+          # Add the function to fs/namespace.c (include version.h for KERNEL_VERSION macro)
           cat >> fs/namespace.c << 'EOFPATCH'
 
           /* Backport path_umount from Linux 5.9+ for KernelSU */
+          #include <linux/version.h>
           #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
           int path_umount(struct path *path, int flags)
           {
