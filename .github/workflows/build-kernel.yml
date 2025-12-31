@@ -274,10 +274,38 @@ jobs:
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs4ksu || \
           git clone --depth=1 https://github.com/sidex15/susfs4ksu.git -b kernel-4.19 susfs4ksu
 
-          # Copy SUSFS source files to kernel
+          # List what's in the kernel patches directory
+          echo "=== susfs4ksu kernel_patches contents ==="
+          ls -la susfs4ksu/kernel_patches/ || true
+          ls -la susfs4ksu/kernel_patches/fs/ || true
+          ls -la susfs4ksu/kernel_patches/include/linux/ || true
+
+          # Copy SUSFS source files to kernel - be explicit about paths
           echo "Copying SUSFS source files..."
-          cp -v susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
-          cp -v susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          mkdir -p include/linux
+
+          # Copy fs files
+          if [ -d "susfs4ksu/kernel_patches/fs" ]; then
+            cp -v susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
+            cp -v susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || true
+          fi
+
+          # Copy include files - this is critical for INODE_STATE_SUS_KSTAT
+          if [ -d "susfs4ksu/kernel_patches/include/linux" ]; then
+            cp -v susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
+            cp -v susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || true
+          fi
+
+          # Verify the header was copied and contains the needed definition
+          echo "=== Checking for INODE_STATE_SUS_KSTAT in susfs.h ==="
+          if [ -f "include/linux/susfs.h" ]; then
+            grep -n "INODE_STATE_SUS_KSTAT" include/linux/susfs.h || echo "WARNING: INODE_STATE_SUS_KSTAT not found in susfs.h"
+            head -50 include/linux/susfs.h
+          else
+            echo "ERROR: include/linux/susfs.h not found!"
+            # Try to find susfs.h anywhere in susfs4ksu
+            find susfs4ksu -name "susfs.h" -exec echo "Found: {}" \; -exec head -50 {} \;
+          fi
 
           # Apply kernel SUSFS patch
           echo "Applying kernel SUSFS patch..."
