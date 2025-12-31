@@ -1,4 +1,4 @@
-name: Build LOS23 Kernel with Device Config + KernelSU
+name: Build LOS23 Kernel with Device Config + SukiSU
 
 on:
   workflow_dispatch:
@@ -122,11 +122,11 @@ jobs:
           # Add to Makefile
           echo 'obj-y += oplus_stubs.o' >> drivers/soc/oplus/Makefile
 
-      - name: Setup KernelSU (rsuntk non-GKI fork)
+      - name: Setup SukiSU-Ultra
         run: |
           cd kernel
-          # Use rsuntk's KernelSU fork which supports non-GKI kernels (4.4-4.19)
-          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -
+          # Use SukiSU-Ultra builtin which supports non-GKI kernels
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 
       - name: Use Device Config
         run: |
@@ -168,7 +168,7 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="KernelSU_DeviceConfig_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="SukiSU_DeviceConfig_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -181,8 +181,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: device-config-${{ github.run_number }}
-          name: KernelSU Device Config Build ${{ github.run_number }}
+          tag_name: sukisu-device-config-${{ github.run_number }}
+          name: SukiSU Device Config Build ${{ github.run_number }}
           files: ${{ env.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
