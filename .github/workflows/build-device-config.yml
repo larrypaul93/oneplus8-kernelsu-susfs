@@ -64,63 +64,8 @@ jobs:
           # Fix ion_system_heap.c - NR_IONCACHE_PAGES undefined - comment out these checks
           sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
 
-          # Create stub file for missing OnePlus functions
-          cat > drivers/soc/oplus/oplus_stubs.c << 'EOFSTUB'
-          // Stubs for missing OnePlus functions
-          #include <linux/module.h>
-          int get_cached_platform_id(void) { return 0; }
-          EXPORT_SYMBOL(get_cached_platform_id);
-          void hans_report(int a, int b, int c, char* d) {}
-          EXPORT_SYMBOL(hans_report);
-          int get_boot_mode(void) { return 0; }
-          EXPORT_SYMBOL(get_boot_mode);
-          int get_eng_version(void) { return 0; }
-          EXPORT_SYMBOL(get_eng_version);
-          int oplus_daily_build(void) { return 0; }
-          EXPORT_SYMBOL(oplus_daily_build);
-          int kswapd_threads = 1;
-          EXPORT_SYMBOL(kswapd_threads);
-          int oplus_vooc_adapter_update_is_rx_gpio(void) { return 0; }
-          EXPORT_SYMBOL(oplus_vooc_adapter_update_is_rx_gpio);
-          int oplus_vooc_adapter_update_is_tx_gpio(void) { return 0; }
-          EXPORT_SYMBOL(oplus_vooc_adapter_update_is_tx_gpio);
-          int get_project(void) { return 0; }
-          EXPORT_SYMBOL(get_project);
-          int is_confidential(void) { return 0; }
-          EXPORT_SYMBOL(is_confidential);
-          void oplus_wpc_set_wrx_en_value(int a) {}
-          EXPORT_SYMBOL(oplus_wpc_set_wrx_en_value);
-          void opchg_set_pd_sdp(int a) {}
-          EXPORT_SYMBOL(opchg_set_pd_sdp);
-          void black_screen_timer_restart(void) {}
-          EXPORT_SYMBOL(black_screen_timer_restart);
-          void bright_screen_timer_restart(void) {}
-          EXPORT_SYMBOL(bright_screen_timer_restart);
-          int oplus_vooc_get_fastchg_started(void) { return 0; }
-          EXPORT_SYMBOL(oplus_vooc_get_fastchg_started);
-          int oplus_vooc_get_fastchg_ing(void) { return 0; }
-          EXPORT_SYMBOL(oplus_vooc_get_fastchg_ing);
-          int oplus_gauge_init(void *a) { return 0; }
-          EXPORT_SYMBOL(oplus_gauge_init);
-          int get_PCB_Version(void) { return 0; }
-          EXPORT_SYMBOL(get_PCB_Version);
-          void switch_headset_state(int a) {}
-          EXPORT_SYMBOL(switch_headset_state);
-          int opticalfp_irq_handler_register(void *a) { return 0; }
-          EXPORT_SYMBOL(opticalfp_irq_handler_register);
-          int is_project(int a) { return 0; }
-          EXPORT_SYMBOL(is_project);
-          int smblib_write(void *chg, int reg, int val) { return 0; }
-          EXPORT_SYMBOL(smblib_write);
-          int smblib_read(void *chg, int reg, int *val) { return 0; }
-          EXPORT_SYMBOL(smblib_read);
-          int smblib_masked_write(void *chg, int reg, int mask, int val) { return 0; }
-          EXPORT_SYMBOL(smblib_masked_write);
-          int qpnp_is_power_off_charging(void) { return 0; }
-          EXPORT_SYMBOL(qpnp_is_power_off_charging);
-          EOFSTUB
-          # Add to Makefile
-          echo 'obj-y += oplus_stubs.o' >> drivers/soc/oplus/Makefile
+          # NOTE: Device config enables actual OPLUS drivers, so we don't need stubs
+          # (Stubs are only needed for defconfig builds which lack OPLUS drivers)
 
       - name: Setup KernelSU (rsuntk non-GKI fork)
         run: |
