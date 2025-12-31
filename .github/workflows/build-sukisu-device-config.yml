@@ -73,29 +73,76 @@ jobs:
           # NOTE: Device config enables actual OPLUS drivers, so we don't need stubs
           # (Stubs are only needed for defconfig builds which lack OPLUS drivers)
 
+      - name: Backport path_umount and get_cred_rcu (required for older kernels)
+        run: |
+          cd kernel
+          # path_umount was added in Linux 5.9, need to backport for 4.19
+          # Add the function to fs/namespace.c (include version.h for KERNEL_VERSION macro)
+          cat >> fs/namespace.c << 'EOFPATCH'
+
+          /* Backport path_umount from Linux 5.9+ for KernelSU */
+          #include <linux/version.h>
+          #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+          int path_umount(struct path *path, int flags)
+          {
+              /* do_umount expects struct mount*, not struct vfsmount* */
+              /* Use real_mount() macro to convert vfsmount to mount */
+              struct mount *mnt = real_mount(path->mnt);
+              return do_umount(mnt, flags);
+          }
+          EXPORT_SYMBOL(path_umount);
+          #endif
+          EOFPATCH
+
+          # Add declaration to include/linux/mount.h
+          sed -i '/^extern void mnt_set_expiry/i extern int path_umount(struct path *path, int flags);' include/linux/mount.h
+
+          # Backport get_cred_rcu for kernels that don't have it
+          # First check if it already exists in the kernel
+          if ! grep -q "get_cred_rcu" include/linux/cred.h; then
+            echo "Adding get_cred_rcu backport..."
+            # Insert BEFORE the final #endif of the include guard
+            sed -i '/#endif.*_LINUX_CRED_H/i \
+          /* Backport get_cred_rcu for KernelSU */ \
+          static inline const struct cred *get_cred_rcu(const struct cred *cred) \
+          { \
+              struct cred *nonconst_cred = (struct cred *) cred; \
+              if (!cred) \
+                  return NULL; \
+              if (!atomic_inc_not_zero(\&nonconst_cred->usage)) \
+                  return NULL; \
+              return cred; \
+          }
+          ' include/linux/cred.h
+          else
+            echo "get_cred_rcu already exists in kernel, skipping backport"
+          fi
+
       - name: Setup SukiSU-Ultra
         run: |
           cd kernel
-          # Use SukiSU-Ultra nongki branch which supports non-GKI kernels with manual hooks
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s nongki
+          # Use SukiSU-Ultra builtin (without SUSFS for now - SUSFS patches need LineageOS 23 compatibility fixes)
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+
+          # Tell SukiSU that path_umount is available (we backported it)
+          echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
 
       - name: Apply Manual Hooks (required for non-GKI kernels)
         run: |
           cd kernel
           echo "Checking SukiSU hook mechanism..."
 
-          # The nongki branch should have its own hook handling
-          # Check if integrate script exists and use it
-          if [ -f "KernelSU/scripts/integrate-no-kprobe.py" ]; then
-            echo "Found integrate-no-kprobe.py script, running it..."
-            python3 KernelSU/scripts/integrate-no-kprobe.py . || {
-              echo "integrate script failed, will rely on kprobe"
-            }
-          else
-            echo "No integrate script found - relying on kprobe mechanism"
-            echo "Note: kprobe may not work reliably on 4.19 kernels"
-            echo "If root doesn't work, manual kernel patches may be needed"
+          # SukiSU uses kprobe by default
+          # Manual hooks require extensive kernel source modification
+          # which is error-prone and kernel-version dependent
+          # The builtin setup should handle this via kprobes
+
+          if [ -f "KernelSU/kernel/core_hook.c" ]; then
+            echo "SukiSU core_hook.c found - using built-in kprobe hooks"
           fi
+
+          echo "Relying on kprobe mechanism for hooks"
+          echo "Note: If root doesn't work, manual kernel patches may be needed"
 
       - name: Use Device Config
         run: |
