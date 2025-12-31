@@ -1,4 +1,4 @@
-name: Build LineageOS Kernel with KernelSU + SUSFS
+name: Build LineageOS Kernel with KernelSU
 
 on:
   workflow_dispatch:
@@ -46,37 +46,11 @@ jobs:
         run: |
           git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_SOURCE kernel
 
-      - name: Setup KernelSU with SUSFS
+      - name: Setup KernelSU
         run: |
           cd kernel
-          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s susfs-rksu-master
-
-      - name: Apply SUSFS Kernel Patches
-        run: |
-          cd kernel
-          # Clone susfs4ksu for kernel patches
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19
-
-          # Copy ALL SUSFS source and header files to kernel
-          cp susfs4ksu/kernel_patches/fs/*.c fs/
-          cp susfs4ksu/kernel_patches/include/linux/*.h include/linux/
-
-          # Apply kernel patch
-          patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
-
-      - name: Fix LineageOS 23 Compatibility
-        run: |
-          cd kernel
-
-          # Fix qpnp-power-on.c log_kpd_event issue (LineageOS 23 specific)
-          sed -i 's/if (pon->log_kpd_event &&/if (0 \&\&/g' drivers/input/misc/qpnp-power-on.c
-          sed -i 's/if (pon->log_kpd_event)/if (0)/g' drivers/input/misc/qpnp-power-on.c
-          sed -i '/pon->log_kpd_event = of_property_read_bool/d' drivers/input/misc/qpnp-power-on.c
-
-          # Add susfs_def.h include to files that use INODE_STATE_SUS_KSTAT
-          if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
-            sed -i '/#include <linux\/mm.h>/a #include <linux/susfs_def.h>' fs/proc/task_mmu.c
-          fi
+          # Use standard KernelSU (without SUSFS for now - SUSFS patches need LineageOS 23 compatibility fixes)
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
       - name: Build Kernel
         run: |
@@ -89,7 +63,6 @@ jobs:
             $DEFCONFIG
 
           scripts/config --file out/.config -e KSU
-          scripts/config --file out/.config -e KSU_SUSFS
           make O=out ARCH=arm64 olddefconfig
 
           make -j$(nproc --all) O=out ARCH=arm64 CC=clang \
@@ -116,7 +89,7 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="KernelSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="KernelSU_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -130,7 +103,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}
-          name: KernelSU + SUSFS Build ${{ github.run_number }}
+          name: KernelSU Build ${{ github.run_number }}
           files: ${{ env.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
