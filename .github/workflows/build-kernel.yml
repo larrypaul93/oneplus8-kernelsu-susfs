@@ -62,6 +62,9 @@ jobs:
             sed -i '1i #ifndef get_cached_platform_id\n#define get_cached_platform_id() 0\n#endif' "$f"
           done
 
+          # Fix schgm-flash.c missing include for smb_charger struct
+          sed -i '/#include "schgm-flash.h"/a #include "smb5-lib.h"' drivers/power/supply/qcom/schgm-flash.c || true
+
       - name: Setup KernelSU
         run: |
           cd kernel
