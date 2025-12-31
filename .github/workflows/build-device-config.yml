@@ -134,6 +134,75 @@ jobs:
           # Tell KernelSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
 
+      - name: Apply Manual Hooks (required for non-GKI kernels)
+        run: |
+          cd kernel
+          echo "Applying KernelSU manual hooks for non-GKI kernel..."
+
+          # Use the integrate-no-kprobe.py script to add manual hooks
+          # This modifies fs/exec.c, fs/open.c, fs/read_write.c, fs/stat.c, drivers/input/input.c
+          if [ -f "KernelSU/scripts/integrate-no-kprobe.py" ]; then
+            python3 KernelSU/scripts/integrate-no-kprobe.py arch/arm64/configs/vendor/kona-perf_defconfig
+          else
+            echo "integrate-no-kprobe.py not found, applying hooks manually..."
+
+            # Manual hook in fs/exec.c - add to do_execveat_common
+            sed -i '/^static int do_execveat_common/,/^{/ {
+              /^{/a\
+              #ifdef CONFIG_KSU\
+              extern bool ksu_execveat_hook __read_mostly;\
+              extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\
+              extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\
+              if (unlikely(ksu_execveat_hook))\
+                  ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\
+              else\
+                  ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);\
+              #endif
+            }' fs/exec.c || echo "Could not patch fs/exec.c automatically"
+
+            # Manual hook in fs/open.c - add to do_faccessat
+            sed -i '/^static long do_faccessat/,/^{/ {
+              /^{/a\
+              #ifdef CONFIG_KSU\
+              extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\
+              ksu_handle_faccessat(&dfd, &filename, &mode, NULL);\
+              #endif
+            }' fs/open.c || echo "Could not patch fs/open.c automatically"
+
+            # Manual hook in fs/read_write.c - add to vfs_read
+            sed -i '/^ssize_t vfs_read/,/^{/ {
+              /^{/a\
+              #ifdef CONFIG_KSU\
+              extern bool ksu_vfs_read_hook __read_mostly;\
+              extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\
+              if (unlikely(ksu_vfs_read_hook))\
+                  ksu_handle_vfs_read(&file, &buf, &count, &pos);\
+              #endif
+            }' fs/read_write.c || echo "Could not patch fs/read_write.c automatically"
+
+            # Manual hook in fs/stat.c - add to vfs_statx or vfs_fstatat
+            sed -i '/^int vfs_statx/,/^{/ {
+              /^{/a\
+              #ifdef CONFIG_KSU\
+              extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);\
+              ksu_handle_stat(&dfd, &filename, &flags);\
+              #endif
+            }' fs/stat.c || echo "Could not patch fs/stat.c automatically"
+
+            # Manual hook in drivers/input/input.c - for Safe Mode
+            sed -i '/^static void input_handle_event/,/^{/ {
+              /^{/a\
+              #ifdef CONFIG_KSU\
+              extern bool ksu_input_hook __read_mostly;\
+              extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\
+              if (unlikely(ksu_input_hook))\
+                  ksu_handle_input_handle_event(&type, &code, &value);\
+              #endif
+            }' drivers/input/input.c || echo "Could not patch drivers/input/input.c automatically"
+          fi
+
+          echo "Manual hooks applied"
+
       - name: Use Device Config
         run: |
           cd kernel
@@ -145,6 +214,10 @@ jobs:
         run: |
           cd kernel
           scripts/config --file out/.config -e KSU
+          # For mlm-games fork, manual hooks are handled differently
+          # Enable kallsyms for proper symbol resolution
+          scripts/config --file out/.config -e KALLSYMS
+          scripts/config --file out/.config -e KALLSYMS_ALL
           make O=out ARCH=arm64 olddefconfig
 
       - name: Build Kernel
