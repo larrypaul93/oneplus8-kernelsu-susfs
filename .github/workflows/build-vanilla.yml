@@ -1,0 +1,100 @@
+name: Build Vanilla LineageOS Kernel
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
+  KERNEL_BRANCH: lineage-23.0
+  DEFCONFIG: vendor/kona-perf_defconfig
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl wget bc bison build-essential flex \
+            libssl-dev libelf-dev python3 cpio zip
+
+      - name: Setup Clang
+        run: |
+          mkdir -p toolchains/clang
+          curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20250704-release/Clang-14.0.6-20250704.tar.gz" | \
+            tar -xzf - -C toolchains/clang
+          echo "$GITHUB_WORKSPACE/toolchains/clang/bin" >> $GITHUB_PATH
+
+      - name: Setup GCC
+        run: |
+          git clone --depth=1 -b android12L-release \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+            toolchains/gcc64
+          git clone --depth=1 -b android12L-release \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
+            toolchains/gcc32
+          echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_PATH
+
+      - name: Clone Kernel
+        run: |
+          git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_SOURCE kernel
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+
+          make O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            $DEFCONFIG
+
+          make -j$(nproc --all) O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+      - name: Package
+        run: |
+          cd kernel
+          if [ ! -f "out/arch/arm64/boot/Image" ]; then
+            echo "Build failed!"
+            exit 1
+          fi
+
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cd AnyKernel3
+          rm -rf .git modules patch ramdisk
+          cp ../out/arch/arm64/boot/Image .
+          sed -i 's/do.devicecheck=.*/do.devicecheck=1/g' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=instantnoodlep/g' anykernel.sh
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
+          sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
+
+          ZIP_NAME="Vanilla_LineageOS_OnePlus8Pro_$(date +%Y%m%d).zip"
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: vanilla-${{ github.run_number }}
+          name: Vanilla LineageOS Kernel Build ${{ github.run_number }}
+          files: ${{ env.ZIP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
