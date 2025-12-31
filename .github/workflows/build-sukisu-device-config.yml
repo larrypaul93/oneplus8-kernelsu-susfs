@@ -21,8 +21,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git curl wget bc bison build-essential flex \
-            libssl-dev libelf-dev python3 python3-pip cpio zip
-          pip3 install mkbootimg
+            libssl-dev libelf-dev python3 cpio zip
+
+      - name: Setup mkbootimg
+        run: |
+          # Clone mkbootimg from Android platform tools
+          git clone --depth=1 https://android.googlesource.com/platform/system/tools/mkbootimg
+          echo "$GITHUB_WORKSPACE/mkbootimg" >> $GITHUB_PATH
 
       - name: Setup Clang
         run: |
@@ -131,7 +136,7 @@ jobs:
           gzip -9 ramdisk.cpio
 
           # Create boot.img with OnePlus 8 Pro parameters
-          python3 -m mkbootimg \
+          python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
             --kernel ../out/arch/arm64/boot/Image \
             --ramdisk ramdisk.cpio.gz \
             --pagesize 4096 \
