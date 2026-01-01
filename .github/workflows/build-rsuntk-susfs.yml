@@ -70,27 +70,9 @@ jobs:
           # Fix ion_system_heap.c - NR_IONCACHE_PAGES undefined - comment out these checks
           sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
 
-      - name: Backport path_umount and get_cred_rcu (required for older kernels)
+      - name: Backport get_cred_rcu (required for older kernels)
         run: |
           cd kernel
-          # path_umount was added in Linux 5.9, need to backport for 4.19
-          cat >> fs/namespace.c << 'EOFPATCH'
-
-          /* Backport path_umount from Linux 5.9+ for KernelSU */
-          #include <linux/version.h>
-          #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
-          int path_umount(struct path *path, int flags)
-          {
-              struct mount *mnt = real_mount(path->mnt);
-              return do_umount(mnt, flags);
-          }
-          EXPORT_SYMBOL(path_umount);
-          #endif
-          EOFPATCH
-
-          # Add declaration to include/linux/mount.h
-          sed -i '/^extern void mnt_set_expiry/i extern int path_umount(struct path *path, int flags);' include/linux/mount.h
-
           # Backport get_cred_rcu for kernels that don't have it
           if ! grep -q "get_cred_rcu" include/linux/cred.h; then
             echo "Adding get_cred_rcu backport..."
@@ -109,6 +91,45 @@ jobs:
           else
             echo "get_cred_rcu already exists in kernel, skipping backport"
           fi
+
+      - name: Apply SUSFS Kernel Patches
+        run: |
+          cd kernel
+          echo "Applying SUSFS kernel patches from susfs4ksu..."
+
+          # Clone susfs4ksu repository
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs4ksu
+
+          # Find the appropriate kernel version patches
+          SUSFS_PATCHES="../susfs4ksu/kernel_patches"
+          ls -la "$SUSFS_PATCHES/"
+
+          # Apply patches for kernel 4.19 (non-GKI)
+          # The susfs patches add the susfs filesystem hiding functionality
+          echo "=== Looking for 4.19 patches ==="
+          find "$SUSFS_PATCHES" -name "*4.19*" -o -name "*4_19*" || echo "No version-specific patches"
+
+          # Try to apply common/base patches first
+          for patch in "$SUSFS_PATCHES"/*.patch; do
+            if [ -f "$patch" ]; then
+              echo "Applying patch: $patch"
+              git apply --check "$patch" 2>/dev/null && git apply "$patch" || echo "Patch $patch may not apply cleanly, skipping"
+            fi
+          done
+
+          # Check if there's a kernel version specific directory
+          if [ -d "$SUSFS_PATCHES/4.19" ]; then
+            for patch in "$SUSFS_PATCHES/4.19"/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "Applying 4.19 patch: $patch"
+                git apply --check "$patch" 2>/dev/null && git apply "$patch" || echo "Patch $patch may not apply cleanly"
+              fi
+            done
+          fi
+
+          # List susfs directory structure
+          echo "=== susfs4ksu structure ==="
+          find ../susfs4ksu -type f -name "*.patch" | head -20
 
       - name: Setup rsuntk KernelSU with SUSFS (Non-GKI fork with SUSFS support)
         run: |
