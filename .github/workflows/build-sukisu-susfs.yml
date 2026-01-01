@@ -117,6 +117,7 @@ jobs:
           echo "Downloading SUSFS 1.5.x source files from liyafe1997's kernel..."
           curl -Lo fs/susfs.c "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/fs/susfs.c"
           curl -Lo include/linux/susfs.h "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/include/linux/susfs.h"
+          curl -Lo include/linux/susfs_def.h "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/include/linux/susfs_def.h"
 
           echo "=== SUSFS Version ==="
           grep "SUSFS_VERSION" include/linux/susfs.h || echo "Version not found"
@@ -139,16 +140,16 @@ jobs:
           done
 
           echo "=== Verifying SUSFS integration ==="
-          ls -la fs/susfs.c include/linux/susfs.h
+          ls -la fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h
 
       - name: Setup SukiSU-Ultra with SUSFS support
         run: |
           cd kernel
-          echo "Setting up SukiSU-Ultra (susfs-1.5.7 branch for SUSFS 1.5.x support)..."
+          echo "Setting up SukiSU-Ultra with SUSFS 1.5.7 support..."
 
-          # Use liyafe1997's SukiSU-Ultra fork with susfs-1.5.7 branch
-          # This branch has SUSFS 1.5.x Kconfig options and supercall support
-          curl -LSs "https://raw.githubusercontent.com/liyafe1997/SukiSU-Ultra/susfs-1.5.7/kernel/setup.sh" | bash -s susfs-1.5.7
+          # Use liyafe1997's exact setup with specific commit (same as their working build)
+          # Commit f4863b20cc8dc0f8cc67418980f022e43014b598 is from susfs-1.5.7 branch
+          curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
 
           # Tell KernelSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
@@ -161,6 +162,20 @@ jobs:
               echo "Removed MODULE_IMPORT_NS from $f"
             fi
           done
+
+          # Fix TWA_RESUME for kernel 4.19 (task_work API changed in 5.x)
+          echo "Fixing task_work API for kernel 4.19..."
+          if grep -q "TWA_RESUME" drivers/kernelsu/allowlist.c; then
+            sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/allowlist.c
+            echo "Fixed TWA_RESUME in allowlist.c"
+          fi
+
+          # Add missing includes for kernel 4.19
+          echo "Adding missing includes for kernel 4.19..."
+          if ! grep -q "linux/sched/task.h" drivers/kernelsu/allowlist.c; then
+            sed -i '/#include <linux\/sched.h>/a #include <linux/sched/task.h>' drivers/kernelsu/allowlist.c
+            echo "Added sched/task.h include"
+          fi
 
           echo "=== SukiSU-Ultra Version ==="
           cat drivers/kernelsu/Makefile | head -20
