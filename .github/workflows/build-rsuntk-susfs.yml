@@ -92,44 +92,33 @@ jobs:
             echo "get_cred_rcu already exists in kernel, skipping backport"
           fi
 
-      - name: Apply SUSFS Kernel Patches
+      - name: Integrate SUSFS into Kernel
         run: |
           cd kernel
-          echo "Applying SUSFS kernel patches from susfs4ksu..."
-
-          # Clone susfs4ksu repository
+          echo "Integrating SUSFS into kernel for 4.19..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs4ksu
-
-          # Find the appropriate kernel version patches
-          SUSFS_PATCHES="../susfs4ksu/kernel_patches"
-          ls -la "$SUSFS_PATCHES/"
-
-          # Apply patches for kernel 4.19 (non-GKI)
-          # The susfs patches add the susfs filesystem hiding functionality
-          echo "=== Looking for 4.19 patches ==="
-          find "$SUSFS_PATCHES" -name "*4.19*" -o -name "*4_19*" || echo "No version-specific patches"
-
-          # Try to apply common/base patches first
-          for patch in "$SUSFS_PATCHES"/*.patch; do
-            if [ -f "$patch" ]; then
-              echo "Applying patch: $patch"
-              git apply --check "$patch" 2>/dev/null && git apply "$patch" || echo "Patch $patch may not apply cleanly, skipping"
-            fi
-          done
-
-          # Check if there's a kernel version specific directory
-          if [ -d "$SUSFS_PATCHES/4.19" ]; then
-            for patch in "$SUSFS_PATCHES/4.19"/*.patch; do
-              if [ -f "$patch" ]; then
-                echo "Applying 4.19 patch: $patch"
-                git apply --check "$patch" 2>/dev/null && git apply "$patch" || echo "Patch $patch may not apply cleanly"
-              fi
-            done
+          echo "=== susfs4ksu structure ===" && ls -la ../susfs4ksu/kernel_patches/
+          ls -la ../susfs4ksu/kernel_patches/fs/ 2>/dev/null || true
+          ls -la ../susfs4ksu/kernel_patches/include/ 2>/dev/null || true
+          echo "Copying SUSFS source files..."
+          [ -d "../susfs4ksu/kernel_patches/fs" ] && cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
+          [ -d "../susfs4ksu/kernel_patches/include" ] && cp -rv ../susfs4ksu/kernel_patches/include/* include/
+          grep -q "susfs" fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs/' >> fs/Makefile
+          if [ -d "fs/susfs" ] && [ ! -f "fs/susfs/Makefile" ]; then
+            echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' > fs/susfs/Makefile
           fi
-
-          # List susfs directory structure
-          echo "=== susfs4ksu structure ==="
-          find ../susfs4ksu -type f -name "*.patch" | head -20
+          grep -q "susfs" fs/Kconfig || echo 'source "fs/susfs/Kconfig"' >> fs/Kconfig
+          if [ -d "fs/susfs" ] && [ ! -f "fs/susfs/Kconfig" ]; then
+            echo -e 'config KSU_SUSFS\n    bool "KernelSU SUSFS Support"\n    depends on KSU\n    default y' > fs/susfs/Kconfig
+          fi
+          echo "=== SUSFS files in kernel ===" && find fs/susfs -type f 2>/dev/null || echo "fs/susfs not found"
+          find include -name "*susfs*" -type f 2>/dev/null || echo "No susfs headers"
+          echo "=== Attempting to apply 4.19 kernel patch ==="
+          PATCH_FILE="../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch"
+          if [ -f "$PATCH_FILE" ]; then
+            git apply --check "$PATCH_FILE" 2>/dev/null && git apply "$PATCH_FILE" && echo "Patch applied!" || \
+            (patch -p1 --force < "$PATCH_FILE" || true; find . -name "*.rej" 2>/dev/null | head -10)
+          fi
 
       - name: Setup rsuntk KernelSU with SUSFS (Non-GKI fork with SUSFS support)
         run: |
