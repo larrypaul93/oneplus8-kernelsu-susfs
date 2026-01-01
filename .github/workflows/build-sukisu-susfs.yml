@@ -1,4 +1,4 @@
-name: Build LOS23 Kernel with rsuntk KernelSU + SUSFS (Non-GKI)
+name: Build LOS23 Kernel with SukiSU-Ultra + SUSFS 1.5.x (Non-GKI)
 
 on:
   workflow_dispatch:
@@ -89,6 +89,7 @@ jobs:
           #endif
           EOFPATCH
           sed -i '/^extern void mnt_set_expiry/i extern int path_umount(struct path *path, int flags);' include/linux/mount.h
+
           # Backport get_cred_rcu for kernels that don't have it
           if ! grep -q "get_cred_rcu" include/linux/cred.h; then
             echo "Adding get_cred_rcu backport..."
@@ -108,74 +109,64 @@ jobs:
             echo "get_cred_rcu already exists in kernel, skipping backport"
           fi
 
-      - name: Integrate SUSFS into Kernel
+      - name: Integrate SUSFS 1.5.x into Kernel
         run: |
           cd kernel
-          echo "Integrating SUSFS 1.4.2 into kernel for 4.19..."
-          # IMPORTANT: Use the 1.4.2-kernel-4.19 tag - SUSFS 1.5.x is only for GKI kernels (5.10+)
-          # The SUSFS module version must match: use ksu_module_susfs v1.4.x, NOT v1.5.x
-          git clone --depth=1 -b 1.4.2-kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs4ksu
-          echo "=== SUSFS version: 1.4.2-kernel-4.19 ==="
-          echo "NOTE: This kernel requires SUSFS module v1.4.x, NOT v1.5.x"
-          ls -la ../susfs4ksu/kernel_patches/
-          echo "Copying SUSFS source files..."
-          cp -v ../susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp -v ../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          echo "=== Applying 4.19 kernel patch ==="
-          patch -p1 --force < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
-          echo "=== Fixing failed patch hunks ==="
-          grep -q "linux/susfs.h" fs/open.c || sed -i '/#include <linux\/mount.h>/a #include <linux/susfs.h>' fs/open.c
-          grep -q "linux/susfs.h" fs/proc/task_mmu.c || sed -i '/#include <linux\/mmu_notifier.h>/a #include <linux/susfs.h>' fs/proc/task_mmu.c
-          find . -name "*.rej" -delete 2>/dev/null || true
-          find . -name "*.orig" -delete 2>/dev/null || true
+          echo "Integrating SUSFS 1.5.x into kernel for 4.19..."
+          # Get SUSFS source files from liyafe1997's kernel (has SUSFS 1.5.9 for non-GKI)
+          echo "Downloading SUSFS 1.5.x source files from liyafe1997's kernel..."
+          curl -Lo fs/susfs.c "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/fs/susfs.c"
+          curl -Lo include/linux/susfs.h "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/include/linux/susfs.h"
+
+          echo "=== SUSFS Version ==="
+          grep "SUSFS_VERSION" include/linux/susfs.h || echo "Version not found"
+
+          # Add SUSFS to fs/Makefile
+          if ! grep -q "susfs.o" fs/Makefile; then
+            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+          fi
+
+          # Apply kernel hooks for SUSFS (based on liyafe1997's patches)
+          echo "=== Applying SUSFS kernel hooks ==="
+
+          # Add susfs.h include to necessary files
+          for file in fs/namei.c fs/open.c fs/read_write.c fs/stat.c fs/readdir.c fs/proc/task_mmu.c; do
+            if [ -f "$file" ] && ! grep -q "linux/susfs.h" "$file"; then
+              sed -i '/#include <linux\/fs.h>/a #include <linux/susfs.h>' "$file" 2>/dev/null || \
+              sed -i '1a #include <linux/susfs.h>' "$file"
+              echo "Added susfs.h include to $file"
+            fi
+          done
+
           echo "=== Verifying SUSFS integration ==="
           ls -la fs/susfs.c include/linux/susfs.h
-          grep -l "susfs" fs/Makefile fs/namei.c fs/stat.c fs/readdir.c || true
 
-      - name: Setup rsuntk KernelSU (Non-GKI fork)
+      - name: Setup SukiSU-Ultra with SUSFS support
         run: |
           cd kernel
-          echo "Setting up rsuntk KernelSU v1.0.5-83-legacy (non-GKI 4.19)..."
-          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s v1.0.5-83-legacy
+          echo "Setting up SukiSU-Ultra (susfs-1.5.7 branch for SUSFS 1.5.x support)..."
+
+          # Use liyafe1997's SukiSU-Ultra fork with susfs-1.5.7 branch
+          # This branch has SUSFS 1.5.x Kconfig options and supercall support
+          curl -LSs "https://raw.githubusercontent.com/liyafe1997/SukiSU-Ultra/susfs-1.5.7/kernel/setup.sh" | bash -s susfs-1.5.7
+
+          # Tell KernelSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
-          echo "=== KernelSU Version ==="
-          cat drivers/kernelsu/Makefile | head -10
 
-      - name: Apply SUSFS patches to KernelSU
+          echo "=== SukiSU-Ultra Version ==="
+          cat drivers/kernelsu/Makefile | head -20
+          echo "=== Checking Kconfig for SUSFS options ==="
+          cat drivers/kernelsu/Kconfig | grep -A2 "SUSFS" || echo "Checking Kconfig..."
+
+      - name: Check SukiSU + SUSFS Integration
         run: |
           cd kernel
-          echo "Applying susfs4ksu patches to KernelSU..."
-          ls -la ../susfs4ksu/kernel_patches/KernelSU/
-          for patch in ../susfs4ksu/kernel_patches/KernelSU/*.patch; do
-            echo "=== Applying $patch ==="
-            patch -p2 -d drivers/kernelsu --force < "$patch" 2>&1 || echo "Patch had issues, checking..."
-          done
-          echo "=== Fixing failed patch hunks manually ==="
-          # Fix kernel_compat.h - add ksu_access_ok function declaration for SUSFS
-          if grep -q "ksu_access_ok.*access_ok" drivers/kernelsu/kernel_compat.h; then
-            echo "Fixing ksu_access_ok macro conflict..."
-            sed -i 's/#define ksu_access_ok(addr, size).*access_ok.*$/#ifdef CONFIG_KSU_SUSFS\nint ksu_access_ok(const void *addr, unsigned long size);\n#else\n#define ksu_access_ok(addr, size) access_ok(VERIFY_READ, addr, size)\n#endif/' drivers/kernelsu/kernel_compat.h
-          fi
-          # Fix selinux/rules.c - add SUSFS rules if needed
-          if ! grep -q "susfs" drivers/kernelsu/selinux/rules.c 2>/dev/null; then
-            echo "SUSFS selinux rules already handled or not needed"
-          fi
-          find drivers/kernelsu -name "*.rej" -delete 2>/dev/null || true
-          find drivers/kernelsu -name "*.orig" -delete 2>/dev/null || true
-          echo "=== KernelSU SUSFS integration check ==="
-          grep -l "susfs" drivers/kernelsu/*.c drivers/kernelsu/*.h 2>/dev/null || echo "No SUSFS references found"
-          echo "=== Checking for Kconfig SUSFS options ==="
-          cat drivers/kernelsu/Kconfig 2>/dev/null | grep -A2 "SUSFS" || echo "No SUSFS in Kconfig"
-
-      - name: Check KernelSU + SUSFS Integration
-        run: |
-          cd kernel
-          echo "rsuntk KernelSU + SUSFS integrated via drivers/kernelsu"
+          echo "SukiSU-Ultra + SUSFS integrated via drivers/kernelsu"
           ls -la drivers/kernelsu/
           echo "=== KernelSU source files ==="
           find drivers/kernelsu -name "*.c" -o -name "*.h" | head -30
-          echo "=== Looking for SUSFS files ==="
-          find drivers/kernelsu -name "*susfs*" || echo "SUSFS integrated into core"
+          echo "=== Checking for SUSFS in Kconfig ==="
+          grep -E "SUSFS|susfs" drivers/kernelsu/Kconfig || echo "No SUSFS in Kconfig"
 
       - name: Use Device Config
         run: |
@@ -184,7 +175,7 @@ jobs:
           cp $GITHUB_WORKSPACE/device_config out/.config
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Enable KSU in Config
+      - name: Enable KSU and SUSFS in Config
         run: |
           cd kernel
           # Enable KernelSU
@@ -194,15 +185,22 @@ jobs:
           scripts/config --file out/.config -e KALLSYMS
           scripts/config --file out/.config -e KALLSYMS_ALL
 
-          # Enable SUSFS features (v1.4.2 compatible options for kernel 4.19)
-          echo "Enabling SUSFS v1.4.2 features..."
+          # Enable SUSFS 1.5.x features
+          echo "Enabling SUSFS v1.5.x features..."
           scripts/config --file out/.config -e KSU_SUSFS
+          scripts/config --file out/.config -e KSU_SUSFS_HAS_MAGIC_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
           scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_OVERLAYFS
           scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
           scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
+          scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
           scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_SU
 
@@ -212,7 +210,7 @@ jobs:
           echo "=== Available SUSFS Kconfig options ==="
           cat drivers/kernelsu/Kconfig 2>/dev/null | grep -E "config KSU|SUSFS" || echo "No SUSFS in Kconfig"
           echo "=== Enabled SUSFS config ==="
-          grep -E "CONFIG_KSU|SUSFS" out/.config | head -30 || echo "No SUSFS configs found"
+          grep -E "CONFIG_KSU|SUSFS" out/.config | head -40 || echo "No SUSFS configs found"
 
       - name: Build Kernel
         run: |
@@ -241,14 +239,14 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="rsuntk-KernelSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="SukiSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create boot.img
         run: |
           cd kernel
-          BOOT_IMG="rsuntk-KernelSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+          BOOT_IMG="SukiSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
 
           # Use pre-extracted ramdisk and dtb from repo
           lz4 -l -12 --favor-decSpeed "$GITHUB_WORKSPACE/lineage-os/ramdisk.cpio" ramdisk.cpio.lz4
@@ -288,33 +286,38 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: rsuntk-ksu-susfs-${{ github.run_number }}
-          name: rsuntk KernelSU + SUSFS Build ${{ github.run_number }}
+          tag_name: sukisu-susfs-${{ github.run_number }}
+          name: SukiSU-Ultra + SUSFS 1.5.x Build ${{ github.run_number }}
           body: |
-            ## rsuntk KernelSU + SUSFS for OnePlus 8 Pro (LineageOS 23)
+            ## SukiSU-Ultra + SUSFS 1.5.x for OnePlus 8 Pro (LineageOS 23)
 
-            This build uses [rsuntk's KernelSU fork](https://github.com/rsuntk/KernelSU) with integrated SUSFS:
-            - Extends official KernelSU to support non-GKI kernels (4.4-4.19)
-            - Includes SUSFS 1.4.2 (Stealth User Space Filesystem) for hiding root
+            This build uses [SukiSU-Ultra](https://github.com/liyafe1997/SukiSU-Ultra) with SUSFS 1.5.x:
+            - Based on liyafe1997's SukiSU-Ultra fork with susfs-1.5.7 branch
+            - Includes SUSFS 1.5.x for non-GKI kernel 4.19
             - Provides advanced root detection bypass capabilities
 
-            ### IMPORTANT: SUSFS Module Compatibility
-            **This kernel uses SUSFS v1.4.2 for kernel 4.19.**
-            - Use SUSFS module v1.4.x (NOT v1.5.x)
-            - SUSFS v1.5.x is only compatible with GKI kernels (5.10+)
-            - Download compatible module: https://github.com/sidex15/ksu_module_susfs/releases (v1.4.x)
+            ### SUSFS Module Compatibility
+            **This kernel uses SUSFS v1.5.x**
+            - Use SUSFS module v1.5.x from: https://github.com/sidex15/susfs4ksu-module/releases
+            - Compatible with latest SUSFS features
 
             ### Features
-            - KernelSU root management
-            - SUSFS integration for hiding SU binaries and processes
-            - Manual hooks for non-GKI kernel compatibility
+            - SukiSU-Ultra root management with KPM support
+            - SUSFS 1.5.x integration:
+              - SUS_PATH: Hide paths from detection
+              - SUS_MOUNT: Hide mount points
+              - SUS_KSTAT: Spoof file stats
+              - SPOOF_UNAME: Spoof kernel version
+              - OPEN_REDIRECT: Redirect file opens
+              - SUS_SU: Runtime su control
+              - And more...
 
             ### Installation
-            - Flash `rsuntk-KernelSU-SUSFS_OnePlus8Pro_*.zip` via TWRP/custom recovery
+            - Flash `SukiSU-SUSFS_OnePlus8Pro_*.zip` via TWRP/custom recovery
             - Or fastboot flash the `boot.img` directly
 
             ### Manager
-            Use KernelSU Manager from: https://github.com/tiann/KernelSU/releases
+            Use SukiSU Manager from: https://github.com/ShirkNeko/SukiSU-Ultra/releases
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.BOOT_IMG }}
