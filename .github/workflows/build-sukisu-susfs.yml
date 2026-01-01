@@ -188,6 +188,18 @@ jobs:
           echo "=== KernelSU source files ==="
           find drivers/kernelsu -name "*.c" -o -name "*.h" | head -30
 
+      - name: Add Manual KSU Hooks for Non-GKI
+        run: |
+          cd kernel
+          echo "Adding manual KernelSU hooks for non-GKI kernel 4.19..."
+          echo "kprobes may not work reliably on this kernel, so we add manual syscall hooks"
+
+          # Run the hook script from repo
+          bash $GITHUB_WORKSPACE/scripts/add-ksu-hooks.sh
+
+          echo "=== Verifying hooks were added ==="
+          grep -l "ksu_handle" fs/exec.c fs/open.c fs/read_write.c fs/stat.c || echo "Some hooks may not have been added"
+
       - name: Use Device Config
         run: |
           cd kernel
