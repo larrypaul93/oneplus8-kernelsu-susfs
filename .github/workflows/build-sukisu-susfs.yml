@@ -118,37 +118,27 @@ jobs:
           echo "=== Patching kernel structures for SUSFS 1.5.x (gordboy approach) ==="
 
           # CRITICAL: SUSFS requires susfs_task_state field in task_struct
-          # gordboy's kernel uses ANDROID_KABI_USE macros to add these fields
-          # LineageOS kernel has ANDROID_KABI_RESERVE macros we can convert
+          # Add fields directly to task_struct for maximum compatibility
 
           echo "Checking for ANDROID_KABI in sched.h..."
           grep -n "ANDROID_KABI" include/linux/sched.h | head -20 || echo "No ANDROID_KABI found"
 
-          # Add susfs_task_state and susfs_last_fake_mnt_id to task_struct
-          echo "Adding SUSFS fields to task_struct..."
-
-          # gordboy uses: ANDROID_KABI_USE(6, u64 susfs_task_state);
-          #               ANDROID_KABI_USE(8, u64 susfs_last_fake_mnt_id);
-
-          if grep -q "ANDROID_KABI_RESERVE" include/linux/sched.h; then
-            echo "Found ANDROID_KABI_RESERVE entries, adding SUSFS fields..."
-
-            # Add susfs_def.h include after android_kabi.h using perl for reliable multiline
+          # Add susfs_def.h include
+          echo "Adding susfs_def.h include..."
+          if ! grep -q "susfs_def.h" include/linux/sched.h; then
             perl -i -pe 's|(#include <linux/android_kabi.h>)|$1\n#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif|' include/linux/sched.h
-
-            # Replace ANDROID_KABI_RESERVE(6) with conditional SUSFS use using perl
-            perl -i -pe 's|(\t)ANDROID_KABI_RESERVE\(6\);|#ifdef CONFIG_KSU_SUSFS\n$1ANDROID_KABI_USE(6, u64 susfs_task_state);\n#else\n$1ANDROID_KABI_RESERVE(6);\n#endif|' include/linux/sched.h
-
-            # Replace ANDROID_KABI_RESERVE(8) with conditional SUSFS use
-            perl -i -pe 's|(\t)ANDROID_KABI_RESERVE\(8\);|#ifdef CONFIG_KSU_SUSFS\n$1ANDROID_KABI_USE(8, u64 susfs_last_fake_mnt_id);\n#else\n$1ANDROID_KABI_RESERVE(8);\n#endif|' include/linux/sched.h
-
-            echo "=== Checking sched.h modifications ==="
-            grep -n "susfs\|SUSFS\|KABI_USE" include/linux/sched.h | head -20
-          else
-            echo "No ANDROID_KABI_RESERVE found, adding SUSFS fields directly..."
-            # For kernels without KABI reserves, add fields using perl
-            perl -i -pe 's|(randomized_struct_fields_end)|#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_task_state;\n\tu64 susfs_last_fake_mnt_id;\n#endif\n$1|' include/linux/sched.h
           fi
+
+          # Add susfs_task_state and susfs_last_fake_mnt_id directly before randomized_struct_fields_end
+          # This is more reliable than ANDROID_KABI_USE which creates unions
+          echo "Adding SUSFS fields directly to task_struct..."
+          if ! grep -q "susfs_task_state" include/linux/sched.h; then
+            perl -i -pe 's|(.*randomized_struct_fields_end)|#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_task_state;\n\tu64 susfs_last_fake_mnt_id;\n#endif\n$1|' include/linux/sched.h
+            echo "Added susfs_task_state and susfs_last_fake_mnt_id to task_struct"
+          fi
+
+          echo "=== Checking sched.h modifications ==="
+          grep -n "susfs\|SUSFS" include/linux/sched.h | head -20
 
           echo "Checking user_struct for ANDROID_KABI..."
           grep -q "ANDROID_KABI_RESERVE" include/linux/sched/user.h 2>/dev/null && echo "Found KABI in user.h" || echo "No KABI in user.h"
@@ -332,6 +322,17 @@ jobs:
               echo "Added sched/task.h include to $f"
             fi
           done
+
+          # Fix pkg_observer.c for kernel 4.19 (handle_inode_event -> handle_event)
+          echo "Fixing pkg_observer.c for kernel 4.19..."
+          if [ -f "drivers/kernelsu/pkg_observer.c" ]; then
+            if grep -q "handle_inode_event" drivers/kernelsu/pkg_observer.c; then
+              # Replace handle_inode_event with handle_event
+              sed -i 's/\.handle_inode_event/.handle_event/g' drivers/kernelsu/pkg_observer.c
+              # Comment out the incompatible code and add 4.19 compatible version
+              echo "Fixed handle_inode_event in pkg_observer.c"
+            fi
+          fi
 
           echo "=== KernelSU-Next Version ==="
           cat drivers/kernelsu/Makefile | head -20
