@@ -128,7 +128,8 @@ jobs:
           ls -la ../susfs4ksu/kernel_patches/KernelSU/
           for patch in ../susfs4ksu/kernel_patches/KernelSU/*.patch; do
             echo "=== Applying $patch ==="
-            patch -p1 -d drivers/kernelsu --force < "$patch" 2>&1 || echo "Patch had issues, checking..."
+            # Use -p2 to strip 'a/kernel/' prefix, apply in drivers/kernelsu/
+            patch -p2 -d drivers/kernelsu --force < "$patch" 2>&1 || echo "Patch had issues, checking..."
           done
           echo "=== Checking for reject files ==="
           find drivers/kernelsu -name "*.rej" 2>/dev/null | while read f; do echo "REJECT: $f"; cat "$f"; done
