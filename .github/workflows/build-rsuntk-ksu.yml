@@ -1,0 +1,251 @@
+name: Build LOS23 Kernel with rsuntk KernelSU (Non-GKI)
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
+  KERNEL_BRANCH: lineage-23.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl wget bc bison build-essential flex \
+            libssl-dev libelf-dev python3 cpio zip android-sdk-libsparse-utils lz4
+
+      - name: Setup mkbootimg tools
+        run: |
+          git clone --depth=1 https://android.googlesource.com/platform/system/tools/mkbootimg
+          chmod +x mkbootimg/*.py
+          echo "$GITHUB_WORKSPACE/mkbootimg" >> $GITHUB_PATH
+
+      - name: Setup Clang
+        run: |
+          mkdir -p toolchains/clang
+          curl -sL "https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20250704-release/Clang-14.0.6-20250704.tar.gz" | \
+            tar -xzf - -C toolchains/clang
+          echo "$GITHUB_WORKSPACE/toolchains/clang/bin" >> $GITHUB_PATH
+
+      - name: Setup GCC
+        run: |
+          git clone --depth=1 -b android12L-release \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+            toolchains/gcc64
+          git clone --depth=1 -b android12L-release \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
+            toolchains/gcc32
+          echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_PATH
+
+      - name: Clone Kernel
+        run: |
+          git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_SOURCE kernel
+
+      - name: Fix LineageOS 23 Bugs
+        run: |
+          cd kernel
+
+          # Fix qpnp-power-on.c - comment out log_kpd_event references (struct member missing in LOS23)
+          sed -i 's/if (pon->log_kpd_event && (cfg->pon_type == PON_KPDPWR))/if (0)/' drivers/input/misc/qpnp-power-on.c
+          sed -i 's/if (pon->log_kpd_event) {/if (0) {/' drivers/input/misc/qpnp-power-on.c
+
+          # Remove multi-line log_kpd_event assignment (spans 2 lines)
+          sed -i '/pon->log_kpd_event = of_property_read_bool/,/"qcom,log-kpd-event");/d' drivers/input/misc/qpnp-power-on.c
+
+          # Fix schgm-flash.h - add forward declaration for smb_charger struct at beginning
+          sed -i '1i struct smb_charger;' drivers/power/supply/qcom/schgm-flash.h || true
+          # Add smb5-lib.h include to schgm-flash.c
+          sed -i '/#include "schgm-flash.h"/a #include "smb5-lib.h"' drivers/power/supply/qcom/schgm-flash.c || true
+
+          # Fix ion_system_heap.c - NR_IONCACHE_PAGES undefined - comment out these checks
+          sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
+
+      - name: Backport path_umount and get_cred_rcu (required for older kernels)
+        run: |
+          cd kernel
+          # path_umount was added in Linux 5.9, need to backport for 4.19
+          cat >> fs/namespace.c << 'EOFPATCH'
+
+          /* Backport path_umount from Linux 5.9+ for KernelSU */
+          #include <linux/version.h>
+          #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+          int path_umount(struct path *path, int flags)
+          {
+              struct mount *mnt = real_mount(path->mnt);
+              return do_umount(mnt, flags);
+          }
+          EXPORT_SYMBOL(path_umount);
+          #endif
+          EOFPATCH
+
+          # Add declaration to include/linux/mount.h
+          sed -i '/^extern void mnt_set_expiry/i extern int path_umount(struct path *path, int flags);' include/linux/mount.h
+
+          # Backport get_cred_rcu for kernels that don't have it
+          if ! grep -q "get_cred_rcu" include/linux/cred.h; then
+            echo "Adding get_cred_rcu backport..."
+            sed -i '/#endif.*_LINUX_CRED_H/i \
+          /* Backport get_cred_rcu for KernelSU */ \
+          static inline const struct cred *get_cred_rcu(const struct cred *cred) \
+          { \
+              struct cred *nonconst_cred = (struct cred *) cred; \
+              if (!cred) \
+                  return NULL; \
+              if (!atomic_inc_not_zero(\&nonconst_cred->usage)) \
+                  return NULL; \
+              return cred; \
+          }
+          ' include/linux/cred.h
+          else
+            echo "get_cred_rcu already exists in kernel, skipping backport"
+          fi
+
+      - name: Setup rsuntk KernelSU (Non-GKI fork with latest features)
+        run: |
+          cd kernel
+          echo "Setting up rsuntk KernelSU fork (supports non-GKI kernels with latest patches)..."
+
+          # rsuntk's fork extends official KernelSU to support non-GKI kernels (4.4-4.19)
+          # It includes manual hooks for non-GKI kernels where kprobes don't work
+          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
+
+          # Tell KernelSU that path_umount is available (we backported it)
+          echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
+
+          # Show KernelSU version
+          echo "=== KernelSU Version ==="
+          cat drivers/kernelsu/ksu.h 2>/dev/null | grep -E "KSU_VERSION|KERNEL_SU_VERSION" || echo "Version info in Makefile"
+          cat drivers/kernelsu/Makefile | head -20
+
+      - name: Check KernelSU Integration
+        run: |
+          cd kernel
+          echo "rsuntk KernelSU integrated via drivers/kernelsu"
+          ls -la drivers/kernelsu/
+          echo "=== KernelSU source files ==="
+          find drivers/kernelsu -name "*.c" -o -name "*.h" | head -20
+
+      - name: Use Device Config
+        run: |
+          cd kernel
+          mkdir -p out
+          cp $GITHUB_WORKSPACE/device_config out/.config
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Enable KSU in Config
+        run: |
+          cd kernel
+          # Enable KernelSU
+          scripts/config --file out/.config -e KSU
+
+          # Enable kallsyms for proper symbol resolution (required for non-GKI hooks)
+          scripts/config --file out/.config -e KALLSYMS
+          scripts/config --file out/.config -e KALLSYMS_ALL
+
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+          make -j$(nproc --all) O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+      - name: Package
+        run: |
+          cd kernel
+          if [ ! -f "out/arch/arm64/boot/Image" ]; then
+            echo "Build failed!"
+            exit 1
+          fi
+
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cd AnyKernel3
+          rm -rf .git modules patch ramdisk
+          cp ../out/arch/arm64/boot/Image .
+          sed -i 's/do.devicecheck=.*/do.devicecheck=1/g' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=instantnoodlep/g' anykernel.sh
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
+          sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
+
+          ZIP_NAME="rsuntk-KernelSU_OnePlus8Pro_$(date +%Y%m%d).zip"
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Create boot.img
+        run: |
+          cd kernel
+          BOOT_IMG="rsuntk-KernelSU_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+
+          # Use pre-extracted ramdisk and dtb from repo
+          lz4 -l -12 --favor-decSpeed "$GITHUB_WORKSPACE/lineage-os/ramdisk.cpio" ramdisk.cpio.lz4
+
+          python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
+            --kernel out/arch/arm64/boot/Image \
+            --ramdisk ramdisk.cpio.lz4 \
+            --dtb "$GITHUB_WORKSPACE/lineage-os/dtb" \
+            --pagesize 4096 \
+            --base 0x00000000 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --tags_offset 0x00000100 \
+            --dtb_offset 0x01f00000 \
+            --header_version 2 \
+            --os_version 16.0.0 \
+            --os_patch_level 2025-12 \
+            --cmdline "androidboot.hardware=qcom androidboot.memcg=1 androidboot.usbcontroller=a600000.dwc3 cgroup.memory=nokmem,nosocket loop.max_part=7 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 reboot=panic_warm service_locator.enable=1 swiotlb=2048" \
+            --output "$GITHUB_WORKSPACE/$BOOT_IMG"
+
+          echo "Created boot.img with LineageOS ramdisk and dtb"
+          echo "BOOT_IMG=$BOOT_IMG" >> $GITHUB_ENV
+          ls -lh "$GITHUB_WORKSPACE/$BOOT_IMG"
+
+      - name: Upload AnyKernel3 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Upload boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BOOT_IMG }}
+          path: ${{ env.BOOT_IMG }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: rsuntk-ksu-${{ github.run_number }}
+          name: rsuntk KernelSU Build ${{ github.run_number }}
+          body: |
+            ## rsuntk KernelSU for OnePlus 8 Pro (LineageOS 23)
+
+            This build uses [rsuntk's KernelSU fork](https://github.com/rsuntk/KernelSU) which:
+            - Extends official KernelSU to support non-GKI kernels (4.4-4.19)
+            - Includes manual hooks for kernels where kprobes don't work
+            - Maintains latest KernelSU features
+
+            ### Installation
+            - Flash `rsuntk-KernelSU_OnePlus8Pro_*.zip` via TWRP/custom recovery
+            - Or fastboot flash the `boot.img` directly
+
+            ### Manager
+            Use KernelSU Manager from: https://github.com/tiann/KernelSU/releases
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.BOOT_IMG }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
