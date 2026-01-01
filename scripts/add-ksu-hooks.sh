@@ -62,14 +62,25 @@ extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, si
 HOOKEOF
 sed -i '/#include <linux\/compat.h>/r /tmp/read_hook.txt' fs/read_write.c
 
-# For vfs_read - insert after the function validates inputs
-# Find "if (!(file->f_mode & FMODE_READ))" which is after declarations
-sed -i '/if (!(file->f_mode \& FMODE_READ))/i\
-#ifdef CONFIG_KSU\
-	if (unlikely(ksu_vfs_read_hook))\
-		ksu_handle_vfs_read(\&file, \&buf, \&count, \&pos);\
-#endif
-' fs/read_write.c
+# For vfs_read - need to match ONLY within vfs_read function
+# Use awk to be more precise about function boundaries
+awk '
+/^ssize_t vfs_read\(struct file \*file, char __user \*buf, size_t count, loff_t \*pos\)$/ {
+    in_vfs_read = 1
+    print
+    next
+}
+in_vfs_read && /ssize_t ret;/ {
+    print
+    print "#ifdef CONFIG_KSU"
+    print "\tif (unlikely(ksu_vfs_read_hook))"
+    print "\t\tksu_handle_vfs_read(&file, &buf, &count, &pos);"
+    print "#endif"
+    in_vfs_read = 0
+    next
+}
+{ print }
+' fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
 
 # Hook 4: fs/stat.c - stat hook
 echo "Patching fs/stat.c..."
