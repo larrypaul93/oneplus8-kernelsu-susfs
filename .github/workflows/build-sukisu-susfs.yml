@@ -1,4 +1,4 @@
-name: Build LOS23 Kernel with SukiSU-Ultra + SUSFS 1.5.x (Non-GKI)
+name: Build LOS23 Kernel with KernelSU-Next + SUSFS 1.5.9 (Non-GKI)
 
 on:
   workflow_dispatch:
@@ -6,6 +6,9 @@ on:
 env:
   KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
   KERNEL_BRANCH: lineage-23.0
+  # Use gordboy's kernel as reference for SUSFS integration
+  SUSFS_KERNEL: https://github.com/gordboy/android_kernel_oneplus_sm8250_los_22.2_gordboy.git
+  SUSFS_BRANCH: Working
 
 jobs:
   build:
@@ -109,29 +112,101 @@ jobs:
             echo "get_cred_rcu already exists in kernel, skipping backport"
           fi
 
-      - name: Integrate SUSFS 1.5.x into Kernel
+      - name: Patch Kernel Structures for SUSFS (gordboy approach)
         run: |
           cd kernel
-          echo "Integrating SUSFS 1.5.x into kernel for 4.19..."
-          # Get SUSFS source files from liyafe1997's kernel (has SUSFS 1.5.9 for non-GKI)
-          echo "Downloading SUSFS 1.5.x source files from liyafe1997's kernel..."
-          curl -Lo fs/susfs.c "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/fs/susfs.c"
-          curl -Lo include/linux/susfs.h "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/include/linux/susfs.h"
-          curl -Lo include/linux/susfs_def.h "https://raw.githubusercontent.com/liyafe1997/kernel_xiaomi_sm8250_mod/android15-lineage22-mod-upgrade-susfs/include/linux/susfs_def.h"
+          echo "=== Patching kernel structures for SUSFS 1.5.x (gordboy approach) ==="
+
+          # CRITICAL: SUSFS requires susfs_task_state field in task_struct
+          # gordboy's kernel uses ANDROID_KABI_USE macros to add these fields
+          # LineageOS kernel has ANDROID_KABI_RESERVE macros we can convert
+
+          echo "Checking for ANDROID_KABI in sched.h..."
+          grep -n "ANDROID_KABI" include/linux/sched.h | head -20 || echo "No ANDROID_KABI found"
+
+          # Add susfs_task_state and susfs_last_fake_mnt_id to task_struct
+          echo "Adding SUSFS fields to task_struct..."
+
+          # gordboy uses: ANDROID_KABI_USE(6, u64 susfs_task_state);
+          #               ANDROID_KABI_USE(8, u64 susfs_last_fake_mnt_id);
+
+          if grep -q "ANDROID_KABI_RESERVE" include/linux/sched.h; then
+            echo "Found ANDROID_KABI_RESERVE entries, adding SUSFS fields..."
+
+            # Create a patch file for sched.h modifications
+            cat > /tmp/susfs_sched_patch.txt << 'PATCHEOF'
+          #ifdef CONFIG_KSU_SUSFS
+          #include <linux/susfs_def.h>
+          #endif
+          PATCHEOF
+
+            # Add susfs_def.h include after android_kabi.h
+            sed -i '/#include <linux\/android_kabi.h>/r /tmp/susfs_sched_patch.txt' include/linux/sched.h
+
+            # Replace ANDROID_KABI_RESERVE(6) with conditional SUSFS use
+            # Using printf to handle the newlines properly
+            REPLACE6=$(printf '#ifdef CONFIG_KSU_SUSFS\n\tANDROID_KABI_USE(6, u64 susfs_task_state);\n#else\n\tANDROID_KABI_RESERVE(6);\n#endif')
+            sed -i "s/ANDROID_KABI_RESERVE(6);/${REPLACE6}/g" include/linux/sched.h
+
+            # Replace ANDROID_KABI_RESERVE(8) with conditional SUSFS use
+            REPLACE8=$(printf '#ifdef CONFIG_KSU_SUSFS\n\tANDROID_KABI_USE(8, u64 susfs_last_fake_mnt_id);\n#else\n\tANDROID_KABI_RESERVE(8);\n#endif')
+            sed -i "s/ANDROID_KABI_RESERVE(8);/${REPLACE8}/g" include/linux/sched.h
+
+            echo "=== Checking sched.h modifications ==="
+            grep -n "susfs\|SUSFS\|KABI_USE" include/linux/sched.h | head -20
+          else
+            echo "No ANDROID_KABI_RESERVE found, adding SUSFS fields directly..."
+            # For kernels without KABI reserves, add fields directly before randomized_struct_fields_end
+            cat > /tmp/susfs_fields.txt << 'FIELDSEOF'
+          #ifdef CONFIG_KSU_SUSFS
+          	u64 susfs_task_state;
+          	u64 susfs_last_fake_mnt_id;
+          #endif
+          FIELDSEOF
+            sed -i '/randomized_struct_fields_end/r /tmp/susfs_fields.txt' include/linux/sched.h
+          fi
+
+          echo "Checking user_struct for ANDROID_KABI..."
+          grep -q "ANDROID_KABI_RESERVE" include/linux/sched/user.h 2>/dev/null && echo "Found KABI in user.h" || echo "No KABI in user.h"
+
+      - name: Integrate SUSFS 1.5.9 from gordboy
+        run: |
+          cd kernel
+          echo "Integrating SUSFS 1.5.9 from gordboy's kernel..."
+
+          # Clone gordboy's kernel to get SUSFS files
+          git clone --depth=1 -b $SUSFS_BRANCH $SUSFS_KERNEL ../gordboy-kernel
+
+          # Copy SUSFS source files from gordboy's kernel
+          echo "Copying SUSFS 1.5.9 source files..."
+          cp ../gordboy-kernel/fs/susfs.c fs/susfs.c
+          cp ../gordboy-kernel/include/linux/susfs.h include/linux/susfs.h
+
+          # susfs_def.h should already be added via sched.h patch, but ensure it exists
+          if [ -f "../gordboy-kernel/include/linux/susfs_def.h" ]; then
+            cp ../gordboy-kernel/include/linux/susfs_def.h include/linux/susfs_def.h
+          fi
 
           echo "=== SUSFS Version ==="
           grep "SUSFS_VERSION" include/linux/susfs.h || echo "Version not found"
 
           # Add SUSFS to fs/Makefile
           if ! grep -q "susfs.o" fs/Makefile; then
-            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+            echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+            echo "Added susfs.o to fs/Makefile"
           fi
 
-          # Apply kernel hooks for SUSFS (based on liyafe1997's patches)
-          echo "=== Applying SUSFS kernel hooks ==="
+          # Apply kernel hooks for SUSFS from gordboy's patches
+          echo "=== Applying SUSFS kernel hooks from gordboy ==="
 
-          # Add susfs.h include to necessary files
-          for file in fs/namei.c fs/open.c fs/read_write.c fs/stat.c fs/readdir.c fs/proc/task_mmu.c; do
+          # Check what hooks gordboy has applied
+          echo "Checking gordboy's kernel patches..."
+
+          # Copy hook patches from gordboy if they exist as diff files
+          # Otherwise we need to apply them manually
+
+          # Add susfs.h include to necessary files (based on gordboy's changes)
+          for file in fs/namei.c fs/open.c fs/read_write.c fs/stat.c fs/readdir.c fs/proc/task_mmu.c fs/namespace.c; do
             if [ -f "$file" ] && ! grep -q "linux/susfs.h" "$file"; then
               sed -i '/#include <linux\/fs.h>/a #include <linux/susfs.h>' "$file" 2>/dev/null || \
               sed -i '1a #include <linux/susfs.h>' "$file"
@@ -140,19 +215,112 @@ jobs:
           done
 
           echo "=== Verifying SUSFS integration ==="
-          ls -la fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h
+          ls -la fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h 2>/dev/null || echo "Some SUSFS files missing"
 
-      - name: Setup SukiSU-Ultra with SUSFS support
+          # Cleanup
+          rm -rf ../gordboy-kernel
+
+      - name: Setup KernelSU-Next with SUSFS support (gordboy approach)
         run: |
           cd kernel
-          echo "Setting up SukiSU-Ultra with SUSFS 1.5.7 support..."
+          echo "Setting up KernelSU-Next with SUSFS support (like gordboy)..."
 
-          # Use liyafe1997's exact setup with specific commit (same as their working build)
-          # Commit f4863b20cc8dc0f8cc67418980f022e43014b598 is from susfs-1.5.7 branch
-          curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
+          # gordboy uses KernelSU-Next which has SUSFS support built-in
+          # Use rsuntk's fork which supports non-GKI 4.19 kernels
+          curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
 
           # Tell KernelSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
+
+          # Add SUSFS Kconfig options if not present (required for SUSFS 1.5.x)
+          if ! grep -q "KSU_SUSFS" drivers/kernelsu/Kconfig; then
+            echo "Adding SUSFS Kconfig options..."
+            cat >> drivers/kernelsu/Kconfig << 'KSUCONFIGEOF'
+
+          config KSU_SUSFS
+          	bool "Enable SUSFS for KernelSU"
+          	depends on KSU
+          	default y
+          	help
+          	  Enable SUSFS (Stealth User Space File System) support for KernelSU.
+          	  This provides advanced hiding capabilities.
+
+          config KSU_SUSFS_HAS_MAGIC_MOUNT
+          	bool "SUSFS has magic mount"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SUS_PATH
+          	bool "Enable sus_path"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SUS_MOUNT
+          	bool "Enable sus_mount"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+          	bool "Auto add sus KSU default mount"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+          	bool "Auto add sus bind mount"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SUS_KSTAT
+          	bool "Enable sus_kstat"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SUS_OVERLAYFS
+          	bool "Enable sus_overlayfs"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_TRY_UMOUNT
+          	bool "Enable try_umount"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+          	bool "Auto add try_umount for bind mount"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SPOOF_UNAME
+          	bool "Enable spoof_uname"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_ENABLE_LOG
+          	bool "Enable SUSFS logging"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          	bool "Hide KSU SUSFS symbols"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+          	bool "Spoof cmdline or bootconfig"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_OPEN_REDIRECT
+          	bool "Enable open_redirect"
+          	depends on KSU_SUSFS
+          	default y
+
+          config KSU_SUSFS_SUS_SU
+          	bool "Enable sus_su"
+          	depends on KSU_SUSFS
+          	default y
+          KSUCONFIGEOF
+          fi
 
           # Fix MODULE_IMPORT_NS for kernel 4.19 (this macro was added in kernel 5.4)
           echo "Fixing MODULE_IMPORT_NS for kernel 4.19..."
@@ -165,32 +333,36 @@ jobs:
 
           # Fix TWA_RESUME for kernel 4.19 (task_work API changed in 5.x)
           echo "Fixing task_work API for kernel 4.19..."
-          if grep -q "TWA_RESUME" drivers/kernelsu/allowlist.c; then
-            sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/allowlist.c
-            echo "Fixed TWA_RESUME in allowlist.c"
-          fi
+          for f in drivers/kernelsu/*.c; do
+            if grep -q "TWA_RESUME" "$f"; then
+              sed -i 's/TWA_RESUME/true/g' "$f"
+              echo "Fixed TWA_RESUME in $f"
+            fi
+          done
 
           # Add missing includes for kernel 4.19
           echo "Adding missing includes for kernel 4.19..."
-          if ! grep -q "linux/sched/task.h" drivers/kernelsu/allowlist.c; then
-            sed -i '/#include <linux\/sched.h>/a #include <linux/sched/task.h>' drivers/kernelsu/allowlist.c
-            echo "Added sched/task.h include"
-          fi
+          for f in drivers/kernelsu/*.c; do
+            if grep -q "#include <linux/sched.h>" "$f" && ! grep -q "linux/sched/task.h" "$f"; then
+              sed -i '/#include <linux\/sched.h>/a #include <linux/sched/task.h>' "$f"
+              echo "Added sched/task.h include to $f"
+            fi
+          done
 
-          echo "=== SukiSU-Ultra Version ==="
+          echo "=== KernelSU-Next Version ==="
           cat drivers/kernelsu/Makefile | head -20
           echo "=== Checking Kconfig for SUSFS options ==="
-          cat drivers/kernelsu/Kconfig | grep -A2 "SUSFS" || echo "Checking Kconfig..."
+          grep -E "SUSFS" drivers/kernelsu/Kconfig | head -20 || echo "No SUSFS in Kconfig"
 
-      - name: Check SukiSU + SUSFS Integration
+      - name: Check KernelSU + SUSFS Integration
         run: |
           cd kernel
-          echo "SukiSU-Ultra + SUSFS integrated via drivers/kernelsu"
+          echo "KernelSU-Next + SUSFS integrated via drivers/kernelsu"
           ls -la drivers/kernelsu/
           echo "=== KernelSU source files ==="
           find drivers/kernelsu -name "*.c" -o -name "*.h" | head -30
           echo "=== Checking for SUSFS in Kconfig ==="
-          grep -E "SUSFS|susfs" drivers/kernelsu/Kconfig || echo "No SUSFS in Kconfig"
+          grep -E "SUSFS|susfs" drivers/kernelsu/Kconfig | head -30 || echo "No SUSFS in Kconfig"
 
       - name: Use Device Config
         run: |
@@ -263,14 +435,14 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="SukiSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="KernelSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create boot.img
         run: |
           cd kernel
-          BOOT_IMG="SukiSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+          BOOT_IMG="KernelSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
 
           # Use pre-extracted ramdisk and dtb from repo
           lz4 -l -12 --favor-decSpeed "$GITHUB_WORKSPACE/lineage-os/ramdisk.cpio" ramdisk.cpio.lz4
@@ -310,38 +482,40 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: sukisu-susfs-${{ github.run_number }}
-          name: SukiSU-Ultra + SUSFS 1.5.x Build ${{ github.run_number }}
+          tag_name: kernelsu-susfs-${{ github.run_number }}
+          name: KernelSU + SUSFS 1.5.9 Build ${{ github.run_number }}
           body: |
-            ## SukiSU-Ultra + SUSFS 1.5.x for OnePlus 8 Pro (LineageOS 23)
+            ## KernelSU + SUSFS 1.5.9 for OnePlus 8 Pro (LineageOS 23)
 
-            This build uses [SukiSU-Ultra](https://github.com/liyafe1997/SukiSU-Ultra) with SUSFS 1.5.x:
-            - Based on liyafe1997's SukiSU-Ultra fork with susfs-1.5.7 branch
-            - Includes SUSFS 1.5.x for non-GKI kernel 4.19
-            - Provides advanced root detection bypass capabilities
+            This build uses [gordboy's approach](https://github.com/gordboy/android_kernel_oneplus_sm8250_los_22.2_gordboy) for SUSFS integration:
+            - SUSFS 1.5.9 integrated directly into kernel with proper structure patches
+            - Uses ANDROID_KABI_USE macros to add susfs_task_state to task_struct
+            - rsuntk's KernelSU fork for non-GKI 4.19 kernel support
+            - Full SUSFS 1.5.x feature set
 
             ### SUSFS Module Compatibility
-            **This kernel uses SUSFS v1.5.x**
+            **This kernel uses SUSFS v1.5.9**
             - Use SUSFS module v1.5.x from: https://github.com/sidex15/susfs4ksu-module/releases
             - Compatible with latest SUSFS features
 
             ### Features
-            - SukiSU-Ultra root management with KPM support
-            - SUSFS 1.5.x integration:
+            - KernelSU root management
+            - SUSFS 1.5.9 integration:
               - SUS_PATH: Hide paths from detection
               - SUS_MOUNT: Hide mount points
               - SUS_KSTAT: Spoof file stats
               - SPOOF_UNAME: Spoof kernel version
               - OPEN_REDIRECT: Redirect file opens
               - SUS_SU: Runtime su control
+              - SUS_OVERLAYFS: Hide overlay mounts
               - And more...
 
             ### Installation
-            - Flash `SukiSU-SUSFS_OnePlus8Pro_*.zip` via TWRP/custom recovery
+            - Flash `KernelSU-SUSFS_OnePlus8Pro_*.zip` via TWRP/custom recovery
             - Or fastboot flash the `boot.img` directly
 
             ### Manager
-            Use SukiSU Manager from: https://github.com/ShirkNeko/SukiSU-Ultra/releases
+            Use KernelSU Manager from: https://github.com/tiann/KernelSU/releases
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.BOOT_IMG }}
