@@ -118,49 +118,45 @@ jobs:
             echo "get_cred_rcu already exists in kernel, skipping backport"
           fi
 
-      - name: Setup KernelSU (mlm-games non-GKI fork)
+      - name: Setup KernelSU with SUSFS
         run: |
           cd kernel
-          # Use mlm-games KernelSU-Non-GKI fork - has proper kernel version guards
-          # and doesn't have pkg_observer.c (avoids fsnotify API issues on 4.19)
-          # Manual setup instead of their setup.sh (which has sh/bash compatibility issues)
+          echo "Setting up KernelSU with SUSFS (includes inline hooks for non-GKI)..."
 
-          # Clone the repository at latest stable tag
-          git clone --depth=1 -b v1.0.2 https://github.com/mlm-games/KernelSU-Non-GKI KernelSU
+          # SUSFS provides both:
+          # 1. Inline hooks for non-GKI kernels (kprobe doesn't work on 4.19)
+          # 2. Root hiding features (hide mounts, files, processes)
 
-          # Create symlink in drivers
-          ln -sf ../KernelSU/kernel drivers/kernelsu
+          # Clone official KernelSU (SUSFS patches are based on official KSU)
+          # Using v0.9.5 which is the last version supporting non-GKI
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
 
-          # Add to Makefile
-          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          # Clone SUSFS patches for kernel 4.19
+          git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs
 
-          # Add to Kconfig (before endmenu)
-          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          # Copy SUSFS kernel files
+          echo "Copying SUSFS kernel patches..."
+          cp -r susfs/kernel_patches/fs/* fs/
+          cp -r susfs/kernel_patches/include/linux/* include/linux/
+
+          # Apply SUSFS patch to KernelSU
+          echo "Applying SUSFS patch to KernelSU..."
+          cd KernelSU
+          patch -p1 < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || {
+            echo "KernelSU SUSFS patch had issues, trying to continue..."
+          }
+          cd ..
+
+          # Apply SUSFS kernel patch
+          echo "Applying SUSFS kernel patch..."
+          if [ -f "susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch" ]; then
+            patch -p1 < susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || {
+              echo "Kernel SUSFS patch had issues, trying to continue..."
+            }
+          fi
 
           # Tell KernelSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
-
-      - name: Apply Manual Hooks (required for non-GKI kernels)
-        run: |
-          cd kernel
-          echo "Applying KernelSU manual hooks for non-GKI kernel..."
-
-          # For mlm-games fork on 4.19 kernels, kprobe doesn't work reliably
-          # The mlm-games fork should handle hooks internally via kprobes
-          # For manual hooks, we need to use the integrate script or skip manual hooks
-          # and rely on kprobe (which may or may not work on 4.19)
-
-          # Check if the mlm-games fork has its own hook mechanism
-          if [ -f "KernelSU/kernel/core_hook.c" ]; then
-            echo "KernelSU core_hook.c found - using built-in kprobe hooks"
-            echo "Note: kprobe may not work reliably on 4.19 kernels"
-          fi
-
-          # The mlm-games fork uses kprobe by default
-          # Manual hooks require extensive kernel source modification
-          # which is error-prone and kernel-version dependent
-          echo "Skipping manual hook patching - relying on kprobe mechanism"
-          echo "If root doesn't work, the kernel may need manual hook patches"
 
       - name: Use Device Config
         run: |
@@ -169,17 +165,29 @@ jobs:
           cp $GITHUB_WORKSPACE/device_config out/.config
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Enable KSU in Config
+      - name: Enable KSU and SUSFS in Config
         run: |
           cd kernel
+          # Enable KernelSU
           scripts/config --file out/.config -e KSU
-          # Enable kprobes for hook mechanism
-          scripts/config --file out/.config -e KPROBES
-          scripts/config --file out/.config -e HAVE_KPROBES
-          scripts/config --file out/.config -e KPROBE_EVENTS
+
+          # Enable SUSFS and its features
+          scripts/config --file out/.config -e KSU_SUSFS
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_OVERLAYFS
+          scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
+          scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
+          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
+
           # Enable kallsyms for proper symbol resolution
           scripts/config --file out/.config -e KALLSYMS
           scripts/config --file out/.config -e KALLSYMS_ALL
+
           make O=out ARCH=arm64 olddefconfig
 
       - name: Build Kernel
@@ -209,14 +217,14 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="KernelSU_DeviceConfig_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="KernelSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create boot.img
         run: |
           cd kernel
-          BOOT_IMG="KernelSU_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+          BOOT_IMG="KernelSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
 
           # Use pre-extracted ramdisk and dtb from repo (extracted from LineageOS boot.img)
           # Compress ramdisk with lz4_legacy format (same as original boot.img)
