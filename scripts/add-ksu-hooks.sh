@@ -20,16 +20,15 @@ extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 HOOKEOF
 sed -i '/#include <linux\/fs_struct.h>/r /tmp/exec_hook.txt' fs/exec.c
 
-# Add hook call after getname_flags
-cat > /tmp/exec_call.txt << 'HOOKEOF'
-#ifdef CONFIG_KSU
-	if (unlikely(ksu_execveat_hook))
-		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
-	else
-		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+# Add hook call after getname_flags - this is safe because it's after variable decls
+sed -i '/getname_flags(filename, lookup_flags, NULL)/a\
+#ifdef CONFIG_KSU\
+	if (unlikely(ksu_execveat_hook))\
+		ksu_handle_execveat(\&fd, \&filename, \&argv, \&envp, \&flags);\
+	else\
+		ksu_handle_execveat_sucompat(\&fd, \&filename, \&argv, \&envp, \&flags);\
 #endif
-HOOKEOF
-sed -i '/getname_flags(filename, lookup_flags, NULL)/r /tmp/exec_call.txt' fs/exec.c
+' fs/exec.c
 
 # Hook 2: fs/open.c - faccessat hook
 echo "Patching fs/open.c..."
@@ -42,12 +41,14 @@ extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int
 HOOKEOF
 sed -i '/#include <linux\/rcupdate.h>/r /tmp/open_hook.txt' fs/open.c
 
-cat > /tmp/open_call.txt << 'HOOKEOF'
-#ifdef CONFIG_KSU
-	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+# For do_faccessat - find the function and insert after the variable declarations
+# Look for a statement line that starts the actual code
+sed -i '/^static long do_faccessat/,/^}/{
+  /res = user_path_at/i\
+#ifdef CONFIG_KSU\
+	ksu_handle_faccessat(\&dfd, \&filename, \&mode, NULL);\
 #endif
-HOOKEOF
-awk '/^static long do_faccessat/{found=1} found && /^{/{print; system("cat /tmp/open_call.txt"); found=0; next} 1' fs/open.c > fs/open.c.tmp && mv fs/open.c.tmp fs/open.c
+}' fs/open.c
 
 # Hook 3: fs/read_write.c - vfs_read hook
 echo "Patching fs/read_write.c..."
@@ -61,13 +62,14 @@ extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, si
 HOOKEOF
 sed -i '/#include <linux\/compat.h>/r /tmp/read_hook.txt' fs/read_write.c
 
-cat > /tmp/read_call.txt << 'HOOKEOF'
-#ifdef CONFIG_KSU
-	if (unlikely(ksu_vfs_read_hook))
-		ksu_handle_vfs_read(&file, &buf, &count, &pos);
+# For vfs_read - insert after the function validates inputs
+# Find "if (!(file->f_mode & FMODE_READ))" which is after declarations
+sed -i '/if (!(file->f_mode \& FMODE_READ))/i\
+#ifdef CONFIG_KSU\
+	if (unlikely(ksu_vfs_read_hook))\
+		ksu_handle_vfs_read(\&file, \&buf, \&count, \&pos);\
 #endif
-HOOKEOF
-awk '/^ssize_t vfs_read/{found=1} found && /^{/{print; system("cat /tmp/read_call.txt"); found=0; next} 1' fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
+' fs/read_write.c
 
 # Hook 4: fs/stat.c - stat hook
 echo "Patching fs/stat.c..."
@@ -80,12 +82,13 @@ extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *fla
 HOOKEOF
 sed -i '/#include <linux\/compat.h>/r /tmp/stat_hook.txt' fs/stat.c
 
-cat > /tmp/stat_call.txt << 'HOOKEOF'
-#ifdef CONFIG_KSU
-	ksu_handle_stat(&dfd, &filename, &flags);
+# For vfs_statx - find the retry: label or the first actual statement
+sed -i '/^int vfs_statx/,/^}/{
+  /getname_flags/i\
+#ifdef CONFIG_KSU\
+	ksu_handle_stat(\&dfd, \&filename, \&flags);\
 #endif
-HOOKEOF
-awk '/^int vfs_statx/{found=1} found && /^{/{print; system("cat /tmp/stat_call.txt"); found=0; next} 1' fs/stat.c > fs/stat.c.tmp && mv fs/stat.c.tmp fs/stat.c
+}' fs/stat.c
 
 # Hook 5: drivers/input/input.c - input event hook for volume key detection
 echo "Patching drivers/input/input.c..."
@@ -104,8 +107,8 @@ if grep -q '#include <linux/input.h>' drivers/input/input.c; then
 elif grep -q '#include "input-compat.h"' drivers/input/input.c; then
   sed -i '/#include "input-compat.h"/r /tmp/input_hook.txt' drivers/input/input.c
 else
-  # Fallback: add after first #include block
-  sed -i '0,/^#include/!b; /^#include.*$/a\
+  # Fallback: add at end of includes
+  sed -i '/^#define pr_fmt/a\
 #ifdef CONFIG_KSU\
 extern bool ksu_input_hook __read_mostly;\
 extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\
@@ -113,9 +116,7 @@ extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code,
 ' drivers/input/input.c
 fi
 
-# For input_handle_event, we need to insert AFTER variable declarations
-# The line "int disposition = input_get_disposition(...)" is a declaration
-# So we insert AFTER this line, not before it
+# For input_handle_event, insert after the variable declaration line
 sed -i '/int disposition = input_get_disposition(dev, type, code, \&value);/a\
 #ifdef CONFIG_KSU\
 	if (unlikely(ksu_input_hook))\
