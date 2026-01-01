@@ -153,6 +153,15 @@ jobs:
           # Tell KernelSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
 
+          # Fix MODULE_IMPORT_NS for kernel 4.19 (this macro was added in kernel 5.4)
+          echo "Fixing MODULE_IMPORT_NS for kernel 4.19..."
+          for f in drivers/kernelsu/*.c; do
+            if grep -q "MODULE_IMPORT_NS" "$f"; then
+              sed -i '/MODULE_IMPORT_NS/d' "$f"
+              echo "Removed MODULE_IMPORT_NS from $f"
+            fi
+          done
+
           echo "=== SukiSU-Ultra Version ==="
           cat drivers/kernelsu/Makefile | head -20
           echo "=== Checking Kconfig for SUSFS options ==="
