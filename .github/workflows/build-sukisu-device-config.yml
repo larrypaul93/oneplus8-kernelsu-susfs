@@ -118,45 +118,22 @@ jobs:
             echo "get_cred_rcu already exists in kernel, skipping backport"
           fi
 
-      - name: Setup SukiSU-Ultra with SUSFS
+      - name: Setup SukiSU-Ultra
         run: |
           cd kernel
-          echo "Setting up SukiSU-Ultra with SUSFS (includes inline hooks for non-GKI)..."
+          echo "Setting up SukiSU-Ultra (builtin mode for non-GKI)..."
 
-          # SukiSU-Ultra with SUSFS provides:
-          # 1. Inline hooks for non-GKI kernels (kprobe doesn't work on 4.19)
-          # 2. Root hiding features (hide mounts, files, processes)
-          # 3. Additional SukiSU features
-
-          # Use SukiSU-Ultra with susfs mode
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs
-
-          # Clone SUSFS patches for kernel 4.19 (same as KernelSU)
-          git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs
-
-          # Copy SUSFS kernel files
-          echo "Copying SUSFS kernel patches..."
-          cp -r susfs/kernel_patches/fs/* fs/
-          cp -r susfs/kernel_patches/include/linux/* include/linux/
-
-          # Apply SUSFS patch to SukiSU
-          echo "Applying SUSFS patch to SukiSU..."
-          cd KernelSU
-          patch -p1 < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || {
-            echo "SukiSU SUSFS patch had issues, trying to continue..."
-          }
-          cd ..
-
-          # Apply SUSFS kernel patch
-          echo "Applying SUSFS kernel patch..."
-          if [ -f "susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch" ]; then
-            patch -p1 < susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || {
-              echo "Kernel SUSFS patch had issues, trying to continue..."
-            }
-          fi
+          # Use SukiSU-Ultra with builtin mode for non-GKI kernels
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 
           # Tell SukiSU that path_umount is available (we backported it)
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
+
+      - name: Add Manual Hooks for Non-GKI Kernel
+        run: |
+          cd kernel
+          chmod +x $GITHUB_WORKSPACE/scripts/add-ksu-hooks.sh
+          $GITHUB_WORKSPACE/scripts/add-ksu-hooks.sh
 
       - name: Use Device Config
         run: |
@@ -165,24 +142,11 @@ jobs:
           cp $GITHUB_WORKSPACE/device_config out/.config
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Enable KSU and SUSFS in Config
+      - name: Enable KSU in Config
         run: |
           cd kernel
           # Enable SukiSU
           scripts/config --file out/.config -e KSU
-
-          # Enable SUSFS and its features
-          scripts/config --file out/.config -e KSU_SUSFS
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
-          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
-          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_OVERLAYFS
-          scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT
-          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
-          scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
-          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
 
           # Enable kallsyms for proper symbol resolution
           scripts/config --file out/.config -e KALLSYMS
@@ -218,14 +182,14 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="SukiSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="SukiSU_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create boot.img
         run: |
           cd kernel
-          BOOT_IMG="SukiSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+          BOOT_IMG="SukiSU_boot_OnePlus8Pro_$(date +%Y%m%d).img"
 
           # Use pre-extracted ramdisk and dtb from repo (extracted from LineageOS boot.img)
           # Compress ramdisk with lz4_legacy format (same as original boot.img)
