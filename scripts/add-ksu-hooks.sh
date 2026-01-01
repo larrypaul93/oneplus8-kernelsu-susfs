@@ -90,6 +90,7 @@ awk '/^int vfs_statx/{found=1} found && /^{/{print; system("cat /tmp/stat_call.t
 # Hook 5: drivers/input/input.c - input event hook for volume key detection
 echo "Patching drivers/input/input.c..."
 
+# Find a more reliable include to insert after
 cat > /tmp/input_hook.txt << 'HOOKEOF'
 
 #ifdef CONFIG_KSU
@@ -97,14 +98,37 @@ extern bool ksu_input_hook __read_mostly;
 extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
 #endif
 HOOKEOF
-sed -i '/#include <linux\/spinlock.h>/r /tmp/input_hook.txt' drivers/input/input.c
+# Try multiple possible includes
+if grep -q '#include <linux/input.h>' drivers/input/input.c; then
+  sed -i '/#include <linux\/input.h>/r /tmp/input_hook.txt' drivers/input/input.c
+elif grep -q '#include "input-compat.h"' drivers/input/input.c; then
+  sed -i '/#include "input-compat.h"/r /tmp/input_hook.txt' drivers/input/input.c
+else
+  # Fallback: add after first #include block
+  sed -i '0,/^#include/!b; /^#include.*$/a\
+#ifdef CONFIG_KSU\
+extern bool ksu_input_hook __read_mostly;\
+extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\
+#endif
+' drivers/input/input.c
+fi
 
+# For input_handle_event, we need to insert AFTER variable declarations
+# The function signature and then find where statements begin
 cat > /tmp/input_call.txt << 'HOOKEOF'
 #ifdef CONFIG_KSU
 	if (unlikely(ksu_input_hook))
 		ksu_handle_input_handle_event(&type, &code, &value);
 #endif
 HOOKEOF
-awk '/^static void input_handle_event/{found=1} found && /^{/{print; system("cat /tmp/input_call.txt"); found=0; next} 1' drivers/input/input.c > drivers/input/input.c.tmp && mv drivers/input/input.c.tmp drivers/input/input.c
+
+# Use a more sophisticated approach: find the function and insert after the first statement line
+# Look for input_get_disposition which is the first actual code after variable decls
+sed -i '/input_get_disposition(dev, type, code, \&value)/i\
+#ifdef CONFIG_KSU\
+	if (unlikely(ksu_input_hook))\
+		ksu_handle_input_handle_event(\&type, \&code, \&value);\
+#endif
+' drivers/input/input.c
 
 echo "Manual hooks added successfully!"
