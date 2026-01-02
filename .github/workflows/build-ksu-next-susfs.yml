@@ -1,4 +1,4 @@
-name: Build LOS23 Kernel with KernelSU-Next + SUSFS (Non-GKI)
+name: Build LOS23 Kernel with KernelSU + SUSFS (Non-GKI)
 
 on:
   workflow_dispatch:
@@ -161,23 +161,25 @@ jobs:
 
           echo 'CFLAGS_namespace.o += -Wno-unused-function' >> fs/Makefile
 
-      - name: Setup KernelSU-Next (legacy branch)
+      - name: Setup KernelSU (original repo)
         run: |
           cd kernel
-          echo "Setting up KernelSU-Next (legacy branch for non-GKI)..."
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" | bash -s legacy
+          echo "Setting up KernelSU (original repo - compatible with SUSFS patch)..."
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           if [ ! -d "drivers/kernelsu" ]; then
-            echo "ERROR: KernelSU-Next setup failed!"
+            echo "ERROR: KernelSU setup failed!"
             exit 1
           fi
           ls -la drivers/kernelsu/
-          echo "KernelSU-Next version:"
+          echo "KernelSU version:"
           cat drivers/kernelsu/Makefile | head -20
+          # Verify core_hook.c exists (required by SUSFS patch)
+          ls -la drivers/kernelsu/../kernel/core_hook.c 2>/dev/null || ls -la $(readlink -f drivers/kernelsu)/core_hook.c 2>/dev/null || echo "Warning: core_hook.c not found"
 
-      - name: Apply SUSFS patch to KernelSU-Next
+      - name: Apply SUSFS patch to KernelSU
         run: |
           cd kernel
-          echo "Applying SUSFS patch to KernelSU-Next driver..."
+          echo "Applying SUSFS patch to KernelSU driver..."
 
           # Find where KernelSU was cloned (drivers/kernelsu is a symlink to KernelSU/kernel)
           KSU_DIR=$(readlink -f drivers/kernelsu)
@@ -381,14 +383,14 @@ jobs:
           sed -i 's/device.name1=.*/device.name1=instantnoodlep/g' anykernel.sh
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
-          ZIP_NAME="KSU-Next-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="KSU-SUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create boot.img
         run: |
           cd kernel
-          BOOT_IMG="KSU-Next-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+          BOOT_IMG="KSU-SUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
           lz4 -l -12 --favor-decSpeed "$GITHUB_WORKSPACE/lineage-os/ramdisk.cpio" ramdisk.cpio.lz4
           python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
             --kernel out/arch/arm64/boot/Image \
@@ -423,13 +425,13 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ksu-next-susfs-${{ github.run_number }}
-          name: KernelSU-Next + SUSFS Build ${{ github.run_number }}
+          tag_name: ksu-susfs-${{ github.run_number }}
+          name: KernelSU + SUSFS Build ${{ github.run_number }}
           body: |
-            ## KernelSU-Next + SUSFS for OnePlus 8 Pro (LineageOS 23)
+            ## KernelSU + SUSFS for OnePlus 8 Pro (LineageOS 23)
 
             This build uses:
-            - [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) **legacy** branch (non-GKI)
+            - [KernelSU](https://github.com/tiann/KernelSU) (original repo for SUSFS compatibility)
             - [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) kernel-4.19 branch
             - Manual syscall hooks (kprobes disabled)
 
@@ -442,7 +444,7 @@ jobs:
             - Flash via TWRP or fastboot boot.img
 
             ### Manager
-            Use KernelSU-Next Manager from: https://github.com/KernelSU-Next/KernelSU-Next/releases
+            Use KernelSU Manager from: https://github.com/tiann/KernelSU/releases
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.BOOT_IMG }}
