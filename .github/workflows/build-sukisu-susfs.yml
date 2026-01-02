@@ -151,13 +151,18 @@ jobs:
                 sed -i '0,/#include/{s/#include/#include <linux\/sched\/task.h>\n#include/}' "$f"
               fi
               echo "Added sched/task.h to $f"
-              grep "sched/task.h" "$f" || echo "WARNING: include may not have been added"
             fi
           done
-          # Verify the include was added
-          grep -l "put_task_struct" *.c | while read f; do
-            echo "Checking $f:"
-            grep "sched/task" "$f" || echo "  Missing sched/task.h!"
+          # Define __NR_clone3 for kernel 4.19 (not available until 5.3)
+          echo "Adding __NR_clone3 compatibility for kernel 4.19..."
+          for f in *.c; do
+            if grep -q "__NR_clone3" "$f" && ! grep -q "ifndef __NR_clone3" "$f"; then
+              echo "#ifndef __NR_clone3" > /tmp/clone3_compat.txt
+              echo "#define __NR_clone3 -1" >> /tmp/clone3_compat.txt
+              echo "#endif" >> /tmp/clone3_compat.txt
+              sed -i '/#include <linux\/syscalls.h>/r /tmp/clone3_compat.txt' "$f" || sed -i '1r /tmp/clone3_compat.txt' "$f"
+              echo "Added __NR_clone3 compat to $f"
+            fi
           done
 
       - name: Backport path_umount and get_cred_rcu
