@@ -203,25 +203,6 @@ jobs:
           echo "=== KernelSU source files ==="
           find drivers/kernelsu -name "*.c" -o -name "*.h" | head -20
 
-      - name: Add Manual KSU Hooks for Non-GKI
-        run: |
-          cd kernel
-          echo "Adding manual KernelSU hooks for non-GKI kernel 4.19..."
-          echo "kprobes may not work reliably on this kernel, so we add manual syscall hooks"
-
-          # Download and apply official RKSU manual hook patch
-          curl -LSs "https://raw.githubusercontent.com/rksuorg/kernel_patches/master/manual_hook/kernel-4.19_5.4.patch" -o /tmp/manual_hook.patch
-
-          # Apply the patch (allow some hunks to fail if kernel differs slightly)
-          patch -p1 --no-backup-if-mismatch -F3 < /tmp/manual_hook.patch || {
-            echo "Patch applied with some failures, checking manually..."
-            # Fallback: run the custom hook script if patch fails
-            bash $GITHUB_WORKSPACE/scripts/add-ksu-hooks.sh
-          }
-
-          echo "=== Verifying hooks were added ==="
-          grep -l "ksu_handle" fs/exec.c fs/open.c fs/read_write.c fs/stat.c drivers/input/input.c || echo "Some hooks may not have been added"
-
       - name: Use Device Config
         run: |
           cd kernel
