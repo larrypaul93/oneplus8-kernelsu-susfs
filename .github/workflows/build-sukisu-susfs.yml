@@ -140,12 +140,24 @@ jobs:
         run: |
           cd kernel/drivers/kernelsu
           echo "Fixing missing headers for kernel 4.19..."
-          # Add missing include for put_task_struct
+          # Add missing include for put_task_struct at the top of the file
           for f in *.c; do
             if grep -q "put_task_struct" "$f" && ! grep -q "linux/sched/task.h" "$f"; then
-              sed -i '/#include <linux\/sched.h>/a #include <linux/sched/task.h>' "$f" 2>/dev/null || true
+              # Try multiple methods to add the include
+              if grep -q "#include <linux/sched.h>" "$f"; then
+                sed -i '/#include <linux\/sched.h>/a #include <linux/sched/task.h>' "$f"
+              else
+                # Add after any #include line
+                sed -i '0,/#include/{s/#include/#include <linux\/sched\/task.h>\n#include/}' "$f"
+              fi
               echo "Added sched/task.h to $f"
+              grep "sched/task.h" "$f" || echo "WARNING: include may not have been added"
             fi
+          done
+          # Verify the include was added
+          grep -l "put_task_struct" *.c | while read f; do
+            echo "Checking $f:"
+            grep "sched/task" "$f" || echo "  Missing sched/task.h!"
           done
 
       - name: Backport path_umount and get_cred_rcu
