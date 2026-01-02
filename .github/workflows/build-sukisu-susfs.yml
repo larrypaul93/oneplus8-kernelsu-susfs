@@ -181,15 +181,35 @@ jobs:
             fi
           done
 
-          # Add stub for ksu_seccomp_allow_cache if missing
-          echo "Adding ksu_seccomp_allow_cache stub for kernel 4.19..."
-          if grep -rq "ksu_seccomp_allow_cache" *.c && ! grep -q "ksu_seccomp_allow_cache" *.h 2>/dev/null; then
-            # Check if it's defined anywhere
-            if ! grep -rq "^void ksu_seccomp_allow_cache\|^int ksu_seccomp_allow_cache" *.c; then
-              echo "// Stub for kernel 4.19" >> ksu_susfs.h 2>/dev/null || echo "// Stub for kernel 4.19" >> susfs.h 2>/dev/null || true
-              echo "static inline void ksu_seccomp_allow_cache(void) {}" >> ksu_susfs.h 2>/dev/null || echo "static inline void ksu_seccomp_allow_cache(void) {}" >> susfs.h 2>/dev/null || true
-              echo "Added ksu_seccomp_allow_cache stub"
-            fi
+          # Disable seccomp_cache.c - SECCOMP_ARCH_NATIVE_NR not available in 4.19
+          echo "Disabling seccomp_cache for kernel 4.19..."
+          if [ -f "seccomp_cache.c" ]; then
+            mv seccomp_cache.c seccomp_cache.c.bak
+            echo "// Disabled for kernel 4.19" > seccomp_cache.c
+            echo "#include <linux/types.h>" >> seccomp_cache.c
+            echo "" >> seccomp_cache.c
+            echo "void ksu_seccomp_allow_cache(void) {}" >> seccomp_cache.c
+            echo "bool ksu_seccomp_check_allow_cached(int syscall_nr) { return false; }" >> seccomp_cache.c
+            echo "void ksu_seccomp_init(void) {}" >> seccomp_cache.c
+            echo "void ksu_seccomp_exit(void) {}" >> seccomp_cache.c
+            echo "Created stub seccomp_cache.c"
+          else
+            # No seccomp_cache.c, create header stub
+            echo "// Stub for kernel 4.19" > seccomp_compat.h
+            echo "static inline void ksu_seccomp_allow_cache(void) {}" >> seccomp_compat.h
+            # Add include to files that need it
+            for f in *.c; do
+              if grep -q "ksu_seccomp_allow_cache" "$f"; then
+                echo '#include "seccomp_compat.h"' > /tmp/fix_seccomp.c
+                cat "$f" >> /tmp/fix_seccomp.c
+                mv /tmp/fix_seccomp.c "$f"
+                echo "Added seccomp_compat.h to $f"
+              fi
+            done
+          fi
+          if grep -q "seccomp_cache.o" Makefile; then
+            sed -i 's/seccomp_cache.o//' Makefile
+            echo "Removed seccomp_cache.o from Makefile"
           fi
 
           # Disable pkg_observer for kernel 4.19 - fsnotify API is completely different
