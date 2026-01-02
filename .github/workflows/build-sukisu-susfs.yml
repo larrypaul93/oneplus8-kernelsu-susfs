@@ -61,184 +61,66 @@ jobs:
           sed -i '/#include "schgm-flash.h"/a #include "smb5-lib.h"' drivers/power/supply/qcom/schgm-flash.c || true
           sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
 
-      - name: Clone susfs4ksu for kernel patches
+      - name: Get SUSFS v2.0.0 files from k30s-reference
         run: |
-          echo "Cloning susfs4ksu kernel-4.19 branch for SUSFS kernel patches..."
-          git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          ls -la susfs4ksu/kernel_patches/
+          echo "Getting SUSFS v2.0.0 implementation files..."
+          # Clone the k30s-reference kernel which has working SUSFS v2.0.0
+          git clone --depth=1 https://github.com/ApartTUSITU/kernel_xiaomi_sm8250.git k30s-susfs-source
 
-      - name: Copy SUSFS kernel files
-        run: |
+          # Copy SUSFS v2.0.0 files from k30s-reference to our kernel
           cd kernel
-          echo "Copying SUSFS source files to kernel..."
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/*.h include/linux/
+          echo "Copying SUSFS v2.0.0 source files..."
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/susfs.c fs/
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/include/linux/susfs.h include/linux/
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/include/linux/susfs_def.h include/linux/
+
+          echo "Verifying SUSFS v2.0.0 files..."
           ls -la fs/susfs.c
           ls -la include/linux/susfs*.h
+          head -30 include/linux/susfs.h
+          echo "SUSFS version check:"
+          grep "SUSFS_VERSION" include/linux/susfs.h || echo "Version not found in susfs.h"
 
-      - name: Adapt SUSFS for SukiSU-Ultra compatibility
+      - name: Copy SUSFS kernel hook files from k30s-reference
         run: |
           cd kernel
-          echo "Adapting SUSFS for SukiSU-Ultra API compatibility..."
+          echo "Copying SUSFS v2.0.0 kernel hook files from k30s-reference..."
+          # These files have SUSFS hooks integrated for v2.0.0 API
+          # We copy the specific hook-modified files rather than patching
 
-          # SukiSU-Ultra expects newer SUSFS API - add missing constants
-          cat >> include/linux/susfs_def.h << 'EOFAPI'
+          # Core filesystem hooks
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/namei.c fs/namei.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/namespace.c fs/namespace.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/stat.c fs/stat.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/statfs.c fs/statfs.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/readdir.c fs/readdir.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/open.c fs/open.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/exec.c fs/exec.c
 
-          /* Additional constants for SukiSU-Ultra compatibility */
-          #ifndef SUSFS_MAGIC
-          #define SUSFS_MAGIC 0xFAFAFAFA
-          #endif
-          #ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
-          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
-          #endif
-          #ifndef CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH
-          #define CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH 0x55551
-          #endif
-          #ifndef CMD_SUSFS_SET_SDCARD_ROOT_PATH
-          #define CMD_SUSFS_SET_SDCARD_ROOT_PATH 0x55552
-          #endif
-          #ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS
-          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS 0x55561
-          #endif
-          #ifndef CMD_SUSFS_ADD_SUS_MAP
-          #define CMD_SUSFS_ADD_SUS_MAP 0x60020
-          #endif
-          #ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
-          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
-          #endif
-          EOFAPI
+          # Proc filesystem hooks
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/proc_namespace.c fs/proc_namespace.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/proc/task_mmu.c fs/proc/task_mmu.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/proc/base.c fs/proc/base.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/proc/cmdline.c fs/proc/cmdline.c
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/proc/fd.c fs/proc/fd.c
 
-          # SukiSU expects void __user ** signatures - update function declarations in susfs.h
-          echo "Updating SUSFS function signatures for SukiSU compatibility..."
+          # Other hooks
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/notify/fdinfo.c fs/notify/fdinfo.c || true
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/devpts/inode.c fs/devpts/inode.c || true
 
-          # Change struct pointer to void ** for SukiSU compatibility
-          sed -i 's/int susfs_add_sus_path(struct st_susfs_sus_path\* __user user_info)/void susfs_add_sus_path(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_add_sus_mount(struct st_susfs_sus_mount\* __user user_info)/void susfs_add_sus_mount(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_add_sus_kstat(struct st_susfs_sus_kstat\* __user user_info)/void susfs_add_sus_kstat(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_update_sus_kstat(struct st_susfs_sus_kstat\* __user user_info)/void susfs_update_sus_kstat(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_add_try_umount(struct st_susfs_try_umount\* __user user_info)/void susfs_add_try_umount(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_set_uname(struct st_susfs_uname\* __user user_info)/void susfs_set_uname(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_set_cmdline_or_bootconfig(char\* __user user_fake_boot_config)/void susfs_set_cmdline_or_bootconfig(void __user **user_info)/g' include/linux/susfs.h
-          sed -i 's/int susfs_add_open_redirect(struct st_susfs_open_redirect\* __user user_info)/void susfs_add_open_redirect(void __user **user_info)/g' include/linux/susfs.h
+          # Copy mount.h header that SUSFS needs
+          cp $GITHUB_WORKSPACE/k30s-susfs-source/fs/mount.h fs/mount.h || true
 
-          # Add stub declarations for missing functions
-          cat >> include/linux/susfs.h << 'EOFSTUB'
-
-          /* SukiSU-Ultra compatibility stubs */
-          #ifndef susfs_add_sus_path_loop
-          static inline void susfs_add_sus_path_loop(void __user **user_info) {}
-          #endif
-          #ifndef susfs_set_android_data_root_path
-          static inline void susfs_set_android_data_root_path(void __user **user_info) {}
-          #endif
-          #ifndef susfs_set_sdcard_root_path
-          static inline void susfs_set_sdcard_root_path(void __user **user_info) {}
-          #endif
-          #ifndef susfs_hide_sus_mnts_for_all_procs
-          static inline void susfs_hide_sus_mnts_for_all_procs(void) {}
-          #endif
-          #ifndef susfs_add_sus_map
-          static inline void susfs_add_sus_map(void __user **user_info) {}
-          #endif
-          #ifndef susfs_enable_avc_log_spoofing
-          static inline void susfs_enable_avc_log_spoofing(void) {}
-          #endif
-          EOFSTUB
-
-          # Update susfs.c function implementations to use new signatures
-          echo "Updating susfs.c function implementations..."
-
-          # Change function signature and add copy_from_user with dereferencing
-          sed -i 's/int susfs_add_sus_path(struct st_susfs_sus_path\* __user user_info) {/void susfs_add_sus_path(void __user **user_info) {\n\tstruct st_susfs_sus_path info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_path __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-          sed -i 's/int susfs_add_sus_mount(struct st_susfs_sus_mount\* __user user_info) {/void susfs_add_sus_mount(void __user **user_info) {\n\tstruct st_susfs_sus_mount info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_mount __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-          sed -i 's/int susfs_add_sus_kstat(struct st_susfs_sus_kstat\* __user user_info) {/void susfs_add_sus_kstat(void __user **user_info) {\n\tstruct st_susfs_sus_kstat info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_kstat __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-          sed -i 's/int susfs_update_sus_kstat(struct st_susfs_sus_kstat\* __user user_info) {/void susfs_update_sus_kstat(void __user **user_info) {\n\tstruct st_susfs_sus_kstat info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_kstat __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-          sed -i 's/int susfs_add_try_umount(struct st_susfs_try_umount\* __user user_info) {/void susfs_add_try_umount(void __user **user_info) {\n\tstruct st_susfs_try_umount info;\n\tif (copy_from_user(\&info, (struct st_susfs_try_umount __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-          sed -i 's/int susfs_set_uname(struct st_susfs_uname\* __user user_info) {/void susfs_set_uname(void __user **user_info) {\n\tstruct st_susfs_uname info;\n\tif (copy_from_user(\&info, (struct st_susfs_uname __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-          sed -i 's/int susfs_add_open_redirect(struct st_susfs_open_redirect\* __user user_info) {/void susfs_add_open_redirect(void __user **user_info) {\n\tstruct st_susfs_open_redirect info;\n\tif (copy_from_user(\&info, (struct st_susfs_open_redirect __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
-
-          echo "SUSFS adapted for SukiSU-Ultra"
-          grep -E "susfs_add_sus_path|SUSFS_MAGIC" include/linux/susfs.h | head -5
-
-      - name: Apply SUSFS kernel patch
-        run: |
-          cd kernel
-          echo "Applying SUSFS kernel hooks patch for kernel 4.19..."
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "Some hunks failed - expected"
-          find . -name "*.rej" -delete 2>/dev/null || true
-          find . -name "*.orig" -delete 2>/dev/null || true
+          # Update fs/Makefile for SUSFS
           if ! grep -q "susfs.o" fs/Makefile; then
             echo "Adding susfs.o to fs/Makefile..."
             sed -i '/^obj-y.*:=/a obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
           fi
           grep "susfs" fs/Makefile
 
-      - name: Fix SUSFS alloc_vfsmnt signature compatibility
-        run: |
-          cd kernel
-          echo "Fixing ALL alloc_vfsmnt callers that weren't updated by SUSFS patch..."
-
-          # The SUSFS patch changes alloc_vfsmnt to take 3 args when CONFIG_KSU_SUSFS_SUS_MOUNT is enabled
-          # But some hunks fail on LineageOS kernel - we need to fix ALL callers manually
-
-          # The three functions that call alloc_vfsmnt are:
-          # 1. vfs_create_mount (line ~1039) - new function not in original patch
-          # 2. vfs_kern_mount (line ~1089) - patch hunk failed
-          # 3. clone_mnt (line ~1134) - patch hunk failed
-
-          # Fix all alloc_vfsmnt calls by wrapping with #ifdef
-          # Use awk to patch ALL three functions at once
-
-          awk '
-          BEGIN { in_vfs_create = 0; in_vfs_kern = 0; in_clone_mnt = 0 }
-
-          # Track which function we are in
-          /^struct vfsmount \*vfs_create_mount\(/ { in_vfs_create = 1 }
-          /^struct vfsmount \*vfs_kern_mount\(/ { in_vfs_kern = 1 }
-          /^static struct mount \*clone_mnt\(/ { in_clone_mnt = 1 }
-
-          # Fix vfs_create_mount
-          in_vfs_create && /mnt = alloc_vfsmnt\(fc->source/ && !/CONFIG_KSU_SUSFS/ {
-              print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
-              print "\tmnt = alloc_vfsmnt(fc->source ?: \"none\", false, 0);"
-              print "#else"
-              print
-              print "#endif"
-              next
-          }
-          in_vfs_create && /^}$/ { in_vfs_create = 0 }
-
-          # Fix vfs_kern_mount
-          in_vfs_kern && /mnt = alloc_vfsmnt\(name\)/ && !/CONFIG_KSU_SUSFS/ {
-              print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
-              print "\tmnt = alloc_vfsmnt(name, false, 0);"
-              print "#else"
-              print
-              print "#endif"
-              next
-          }
-          in_vfs_kern && /^}$/ { in_vfs_kern = 0 }
-
-          # Fix clone_mnt
-          in_clone_mnt && /mnt = alloc_vfsmnt\(old->mnt_devname\)/ && !/CONFIG_KSU_SUSFS/ {
-              print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
-              print "\tmnt = alloc_vfsmnt(old->mnt_devname, false, 0);"
-              print "#else"
-              print
-              print "#endif"
-              next
-          }
-          in_clone_mnt && /^}$/ { in_clone_mnt = 0 }
-
-          { print }
-          ' fs/namespace.c > fs/namespace.c.tmp && mv fs/namespace.c.tmp fs/namespace.c
-
-          # Verify the fixes
-          echo "=== Checking alloc_vfsmnt calls in namespace.c ==="
-          grep -n "alloc_vfsmnt" fs/namespace.c
-          echo ""
-          echo "=== Checking for #ifdef wrappers ==="
-          grep -B1 -A3 "alloc_vfsmnt" fs/namespace.c | head -60
+          echo "SUSFS v2.0.0 kernel hook files copied"
+          echo "Checking for SUSFS references in copied files:"
+          grep -l "susfs" fs/namei.c fs/namespace.c fs/stat.c | head -5
 
       - name: Backport path_umount and get_cred_rcu
         run: |
@@ -313,18 +195,22 @@ jobs:
 
           echo 'CFLAGS_namespace.o += -Wno-unused-function' >> fs/Makefile
 
-      - name: Setup SukiSU-Ultra (builtin branch)
+      - name: Setup SukiSU-Ultra (ApartTUSITU fork)
         run: |
           cd kernel
-          echo "Setting up SukiSU-Ultra (builtin branch for non-GKI)..."
+          echo "Setting up SukiSU-Ultra (ApartTUSITU fork for SUSFS v2.0.0 compatibility)..."
 
-          # Clone SukiSU-Ultra builtin branch explicitly
-          git clone --depth=1 -b builtin https://github.com/SukiSU-Ultra/SukiSU-Ultra.git SukiSU-Ultra
-          ls -la SukiSU-Ultra/kernel/
+          # Use the ApartTUSITU fork's setup script like k30s-reference does
+          curl -LSs "https://raw.githubusercontent.com/ApartTUSITU/SukiSU-Ultra/main/kernel/setup.sh" | bash -s ApartTUSITU
 
-          # Setup symlink like the setup.sh does
+          if [ ! -d "KernelSU" ]; then
+            echo "ERROR: SukiSU-Ultra setup failed!"
+            exit 1
+          fi
+
+          # Setup symlink
           mkdir -p drivers
-          ln -sf "$(realpath SukiSU-Ultra/kernel)" drivers/kernelsu
+          ln -sf "$(realpath KernelSU/kernel)" drivers/kernelsu
 
           # Add to Makefile
           if ! grep -q "kernelsu" drivers/Makefile; then
@@ -336,15 +222,12 @@ jobs:
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          if [ ! -d "drivers/kernelsu" ]; then
-            echo "ERROR: SukiSU-Ultra setup failed!"
-            exit 1
-          fi
           ls -la drivers/kernelsu/
-          echo "SukiSU-Ultra builtin branch version:"
+          echo "SukiSU-Ultra version:"
           cat drivers/kernelsu/Makefile | head -20
           echo "Checking for SUSFS in supercalls.c:"
-          grep -c "SUSFS" drivers/kernelsu/supercalls.c || echo "SUSFS not found"
+          grep -c "SUSFS" drivers/kernelsu/supercalls.c || echo "Checking setuid_hook.c"
+          grep -c "SUSFS" drivers/kernelsu/setuid_hook.c || echo "SUSFS not found in setuid_hook.c either"
 
       # NOTE: NOT applying 10_enable_susfs_for_ksu.patch - SukiSU builtin already has SUSFS in supercalls.c
       # The kernel SUSFS files (susfs.c, susfs.h) are needed but driver patch would conflict
@@ -382,25 +265,30 @@ jobs:
           cp $GITHUB_WORKSPACE/device_config out/.config
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Enable KSU and SUSFS in Config
+      - name: Enable KSU, SUSFS and KPM in Config
         run: |
           cd kernel
           scripts/config --file out/.config -e KSU
           scripts/config --file out/.config -e KALLSYMS
           scripts/config --file out/.config -e KALLSYMS_ALL
-          # Enable all SUSFS features
+          # Required for SUSFS TIF_PROC_UMOUNTED flag
+          scripts/config --file out/.config -e THREAD_INFO_IN_TASK
+          # Enable all SUSFS v2.0.0 features
           scripts/config --file out/.config -e KSU_SUSFS
           scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
           scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
-          scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
           scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
-          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
           scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_MAP
+          # Enable KPM support
+          scripts/config --file out/.config -e KPM
           make O=out ARCH=arm64 olddefconfig
-          echo "Checking KSU and SUSFS config:"
-          grep -E "CONFIG_KSU" out/.config | head -30
+          echo "Checking KSU, SUSFS, and KPM config:"
+          grep -E "CONFIG_KSU|CONFIG_THREAD_INFO|CONFIG_KPM" out/.config | head -40
 
       - name: Build Kernel
         run: |
@@ -411,6 +299,27 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm \
             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+      - name: Apply KPM Patch to Kernel Image
+        run: |
+          cd kernel/out/arch/arm64/boot/
+          if [ ! -f "Image" ]; then
+            echo "Build failed - no Image file!"
+            exit 1
+          fi
+          echo "Applying KernelPatch Module (KPM) patch..."
+          wget -q https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.2/patch_linux
+          chmod +x patch_linux
+          ./patch_linux
+          if [ -f "oImage" ]; then
+            rm Image
+            mv oImage Image
+            echo "KPM patch applied successfully"
+            ls -lh Image
+          else
+            echo "KPM patching failed, using original Image"
+          fi
+          rm -f patch_linux
 
       - name: Package
         run: |
@@ -472,17 +381,23 @@ jobs:
           tag_name: sukisu-susfs-${{ github.run_number }}
           name: SukiSU-Ultra + SUSFS Build ${{ github.run_number }}
           body: |
-            ## SukiSU-Ultra + SUSFS for OnePlus 8 Pro (LineageOS 23)
+            ## SukiSU-Ultra + SUSFS v2.0.0 + KPM for OnePlus 8 Pro (LineageOS 23)
 
             This build uses:
-            - [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) **builtin** branch (non-GKI)
-            - [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) kernel-4.19 branch
+            - [SukiSU-Ultra](https://github.com/ApartTUSITU/SukiSU-Ultra) **ApartTUSITU fork** (non-GKI compatible)
+            - **SUSFS v2.0.0** from k30s-reference kernel implementation
+            - **KPM (KernelPatch Module)** support patched in
             - Manual syscall hooks (kprobes disabled)
 
-            ### SUSFS Features
+            ### SUSFS v2.0.0 Features
             - SUS_PATH, SUS_MOUNT, SUS_KSTAT
-            - SPOOF_UNAME, OPEN_REDIRECT
-            - HIDE_KSU_SUSFS_SYMBOLS, TRY_UMOUNT
+            - SPOOF_UNAME, SPOOF_CMDLINE_OR_BOOTCONFIG
+            - OPEN_REDIRECT, SUS_MAP
+            - HIDE_KSU_SUSFS_SYMBOLS
+            - ENABLE_LOG
+
+            ### KPM (KernelPatch Module)
+            Kernel is patched with KPM support for loading additional kernel patches
 
             ### Installation
             - Flash via TWRP or fastboot boot.img
