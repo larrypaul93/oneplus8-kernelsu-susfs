@@ -116,10 +116,21 @@ jobs:
           cd kernel
           echo "Setting up SukiSU-Ultra with built-in SUSFS support for non-GKI kernel..."
 
-          # Use ApartTUSITU fork which has SUSFS integrated directly into KernelSU driver
-          # This fork doesn't require separate susfs4ksu kernel patches
-          echo "Setting up SukiSU-Ultra (ApartTUSITU fork with built-in SUSFS)..."
-          curl -LSs "https://raw.githubusercontent.com/ApartTUSITU/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+          # Use ShirkNeko fork with susfs-dev branch - compatible with non-GKI kernels (4.14+)
+          # This fork has SUSFS integrated and works with older kernel versions
+          echo "Setting up SukiSU-Ultra (ShirkNeko fork with SUSFS for non-GKI)..."
+          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-dev
+
+          # Apply SUSFS patch to KernelSU driver (adds SUSFS functionality)
+          echo "Applying SUSFS patch to KernelSU driver..."
+          curl -LSs "https://raw.githubusercontent.com/Edhic1/kernel_KSu_Next_Lancelot/main/patches/SUSFS.patch" -o /tmp/SUSFS.patch
+          cd drivers/kernelsu
+          patch -p1 --no-backup-if-mismatch -F3 < /tmp/SUSFS.patch || {
+            echo "SUSFS patch had some failures - some hunks may already be applied"
+          }
+          cd ../..
+          find drivers/kernelsu -name "*.rej" -delete 2>/dev/null || true
+          find drivers/kernelsu -name "*.orig" -delete 2>/dev/null || true
 
           # Verify setup worked
           if [ ! -d "drivers/kernelsu" ]; then
@@ -250,18 +261,24 @@ jobs:
           # Enable SukiSU
           scripts/config --file out/.config -e KSU
 
-          # Enable SUSFS options (ApartTUSITU fork has SUSFS built into KernelSU driver)
+          # Enable SUSFS options (ShirkNeko fork with susfs-dev branch)
           echo "Enabling SUSFS options..."
           scripts/config --file out/.config -e KSU_SUSFS
+          scripts/config --file out/.config -e KSU_SUSFS_HAS_MAGIC_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
           scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_OVERLAYFS
+          scripts/config --file out/.config -e KSU_SUSFS_TRY_UMOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
-          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_MAP
           scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
           scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_SU
 
           # Enable kallsyms for proper symbol resolution (required for non-GKI hooks)
           scripts/config --file out/.config -e KALLSYMS
@@ -352,7 +369,7 @@ jobs:
           body: |
             ## SukiSU-Ultra + SUSFS for OnePlus 8 Pro (LineageOS 23)
 
-            This build uses [ApartTUSITU's SukiSU-Ultra fork](https://github.com/ApartTUSITU/SukiSU-Ultra) which:
+            This build uses [ShirkNeko's SukiSU-Ultra fork](https://github.com/ShirkNeko/SukiSU-Ultra) with SUSFS patch which:
             - Has SUSFS built directly into the KernelSU driver (no separate kernel patches needed)
             - Supports non-GKI kernels (kernel 4.19)
             - Includes manual syscall hooks for proper root access
