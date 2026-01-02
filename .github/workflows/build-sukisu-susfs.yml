@@ -240,6 +240,32 @@ jobs:
             echo "Removed file_wrapper.o from Makefile"
           fi
 
+          # Disable entire SELinux module for kernel 4.19 - structures changed significantly
+          echo "Disabling SELinux module for kernel 4.19..."
+          if [ -d "selinux" ]; then
+            for f in selinux/*.c; do
+              if [ -f "$f" ]; then
+                mv "$f" "$f.bak"
+              fi
+            done
+            echo "// Disabled for kernel 4.19" > selinux/sepolicy.c
+            echo "#include <linux/types.h>" >> selinux/sepolicy.c
+            echo "int ksu_handle_sepolicy(void) { return 0; }" >> selinux/sepolicy.c
+            echo "void ksu_sepolicy_init(void) {}" >> selinux/sepolicy.c
+            echo "void ksu_sepolicy_exit(void) {}" >> selinux/sepolicy.c
+
+            echo "// Disabled for kernel 4.19" > selinux/rules.c
+            echo "#include <linux/types.h>" >> selinux/rules.c
+            echo "void ksu_selinux_rules_init(void) {}" >> selinux/rules.c
+            echo "void ksu_selinux_rules_exit(void) {}" >> selinux/rules.c
+
+            echo "// Disabled for kernel 4.19" > selinux/selinux.c
+            echo "#include <linux/types.h>" >> selinux/selinux.c
+            echo "void ksu_selinux_init(void) {}" >> selinux/selinux.c
+            echo "void ksu_selinux_exit(void) {}" >> selinux/selinux.c
+            echo "Stubbed SELinux module"
+          fi
+
           # Disable pkg_observer for kernel 4.19 - fsnotify API is completely different
           echo "Disabling pkg_observer for kernel 4.19 (incompatible fsnotify API)..."
           if [ -f "pkg_observer.c" ]; then

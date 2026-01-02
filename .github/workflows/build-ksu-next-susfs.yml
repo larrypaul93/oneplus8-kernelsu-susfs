@@ -266,21 +266,35 @@ jobs:
           fi
           cd ../..
 
-          # Disable SELinux sepolicy.c for kernel 4.19 - structures changed significantly
-          echo "Disabling SELinux sepolicy.c for kernel 4.19..."
-          cd drivers/kernelsu/selinux
-          if [ -f "sepolicy.c" ]; then
-            mv sepolicy.c sepolicy.c.bak
-            echo "// Disabled for kernel 4.19 - SELinux structures incompatible" > sepolicy.c
-            echo "#include <linux/types.h>" >> sepolicy.c
-            echo "" >> sepolicy.c
-            echo "// Stub functions - SELinux policy modification not available on 4.19" >> sepolicy.c
-            echo "int ksu_handle_sepolicy(void) { return 0; }" >> sepolicy.c
-            echo "void ksu_sepolicy_init(void) {}" >> sepolicy.c
-            echo "void ksu_sepolicy_exit(void) {}" >> sepolicy.c
-            echo "Created stub sepolicy.c"
+          # Disable entire SELinux module for kernel 4.19 - structures changed significantly
+          echo "Disabling SELinux module for kernel 4.19..."
+          cd drivers/kernelsu
+          if [ -d "selinux" ]; then
+            # Backup and stub all selinux files
+            for f in selinux/*.c; do
+              if [ -f "$f" ]; then
+                mv "$f" "$f.bak"
+              fi
+            done
+            # Create minimal stubs
+            echo "// Disabled for kernel 4.19 - SELinux structures incompatible" > selinux/sepolicy.c
+            echo "#include <linux/types.h>" >> selinux/sepolicy.c
+            echo "int ksu_handle_sepolicy(void) { return 0; }" >> selinux/sepolicy.c
+            echo "void ksu_sepolicy_init(void) {}" >> selinux/sepolicy.c
+            echo "void ksu_sepolicy_exit(void) {}" >> selinux/sepolicy.c
+
+            echo "// Disabled for kernel 4.19" > selinux/rules.c
+            echo "#include <linux/types.h>" >> selinux/rules.c
+            echo "void ksu_selinux_rules_init(void) {}" >> selinux/rules.c
+            echo "void ksu_selinux_rules_exit(void) {}" >> selinux/rules.c
+
+            echo "// Disabled for kernel 4.19" > selinux/selinux.c
+            echo "#include <linux/types.h>" >> selinux/selinux.c
+            echo "void ksu_selinux_init(void) {}" >> selinux/selinux.c
+            echo "void ksu_selinux_exit(void) {}" >> selinux/selinux.c
+            echo "Stubbed SELinux module"
           fi
-          cd ../../..
+          cd ../..
 
       - name: Backport path_umount and get_cred_rcu
         run: |
