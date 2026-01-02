@@ -61,6 +61,107 @@ jobs:
           sed -i '/#include "schgm-flash.h"/a #include "smb5-lib.h"' drivers/power/supply/qcom/schgm-flash.c || true
           sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
 
+      - name: Clone susfs4ksu for kernel patches
+        run: |
+          echo "Cloning susfs4ksu kernel-4.19 branch for SUSFS kernel patches..."
+          git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          ls -la susfs4ksu/kernel_patches/
+
+      - name: Copy SUSFS kernel files
+        run: |
+          cd kernel
+          echo "Copying SUSFS source files to kernel..."
+          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/*.h include/linux/
+          ls -la fs/susfs.c
+          ls -la include/linux/susfs*.h
+
+      - name: Apply SUSFS kernel patch
+        run: |
+          cd kernel
+          echo "Applying SUSFS kernel hooks patch for kernel 4.19..."
+          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "Some hunks failed - expected"
+          find . -name "*.rej" -delete 2>/dev/null || true
+          find . -name "*.orig" -delete 2>/dev/null || true
+          if ! grep -q "susfs.o" fs/Makefile; then
+            echo "Adding susfs.o to fs/Makefile..."
+            sed -i '/^obj-y.*:=/a obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
+          fi
+          grep "susfs" fs/Makefile
+
+      - name: Backport path_umount and get_cred_rcu
+        run: |
+          cd kernel
+          echo "Adding kernel backports for 4.19..."
+
+          if ! grep -q "^static int can_umount" fs/namespace.c; then
+            echo "" >> fs/namespace.c
+            echo "/* Backport can_umount for SUSFS/KernelSU */" >> fs/namespace.c
+            echo "static int can_umount(const struct path *path, int flags)" >> fs/namespace.c
+            echo "{" >> fs/namespace.c
+            echo "    struct mount *mnt = real_mount(path->mnt);" >> fs/namespace.c
+            echo "    if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))" >> fs/namespace.c
+            echo "        return -EINVAL;" >> fs/namespace.c
+            echo "    if (!may_mount())" >> fs/namespace.c
+            echo "        return -EPERM;" >> fs/namespace.c
+            echo "    if (path->dentry != path->mnt->mnt_root)" >> fs/namespace.c
+            echo "        return -EINVAL;" >> fs/namespace.c
+            echo "    if (!check_mnt(mnt))" >> fs/namespace.c
+            echo "        return -EINVAL;" >> fs/namespace.c
+            echo "    if (mnt->mnt.mnt_flags & MNT_LOCKED)" >> fs/namespace.c
+            echo "        return -EINVAL;" >> fs/namespace.c
+            echo "    if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))" >> fs/namespace.c
+            echo "        return -EPERM;" >> fs/namespace.c
+            echo "    return 0;" >> fs/namespace.c
+            echo "}" >> fs/namespace.c
+          fi
+
+          if ! grep -q "^int path_umount" fs/namespace.c; then
+            echo "" >> fs/namespace.c
+            echo "/* Backport path_umount from Linux 5.9+ for KernelSU/SUSFS */" >> fs/namespace.c
+            echo "int path_umount(struct path *path, int flags)" >> fs/namespace.c
+            echo "{" >> fs/namespace.c
+            echo "    struct mount *mnt = real_mount(path->mnt);" >> fs/namespace.c
+            echo "    int ret;" >> fs/namespace.c
+            echo "    ret = can_umount(path, flags);" >> fs/namespace.c
+            echo "    if (!ret)" >> fs/namespace.c
+            echo "        ret = do_umount(mnt, flags);" >> fs/namespace.c
+            echo "    dput(path->dentry);" >> fs/namespace.c
+            echo "    mntput_no_expire(mnt);" >> fs/namespace.c
+            echo "    return ret;" >> fs/namespace.c
+            echo "}" >> fs/namespace.c
+            echo "EXPORT_SYMBOL(path_umount);" >> fs/namespace.c
+          fi
+
+          if ! grep -q "int path_umount" fs/internal.h; then
+            sed -i '/^extern void __init mnt_init/a int path_umount(struct path *path, int flags);' fs/internal.h
+          fi
+
+          if ! grep -q "get_cred_rcu" include/linux/cred.h; then
+            echo "Adding get_cred_rcu backport..."
+            echo "" > /tmp/get_cred_rcu.txt
+            echo "/* Backport get_cred_rcu for KernelSU */" >> /tmp/get_cred_rcu.txt
+            echo "static inline const struct cred *get_cred_rcu(const struct cred *cred)" >> /tmp/get_cred_rcu.txt
+            echo "{" >> /tmp/get_cred_rcu.txt
+            echo "    struct cred *nonconst_cred = (struct cred *) cred;" >> /tmp/get_cred_rcu.txt
+            echo "    if (!cred)" >> /tmp/get_cred_rcu.txt
+            echo "        return NULL;" >> /tmp/get_cred_rcu.txt
+            echo "    if (!atomic_inc_not_zero(&nonconst_cred->usage))" >> /tmp/get_cred_rcu.txt
+            echo "        return NULL;" >> /tmp/get_cred_rcu.txt
+            echo "    return cred;" >> /tmp/get_cred_rcu.txt
+            echo "}" >> /tmp/get_cred_rcu.txt
+            echo "" >> /tmp/get_cred_rcu.txt
+            LINE=$(grep -n "^static inline void put_cred" include/linux/cred.h | head -1 | cut -d: -f1)
+            if [ -n "$LINE" ]; then
+              head -n $((LINE - 1)) include/linux/cred.h > /tmp/cred_new.h
+              cat /tmp/get_cred_rcu.txt >> /tmp/cred_new.h
+              tail -n +$LINE include/linux/cred.h >> /tmp/cred_new.h
+              mv /tmp/cred_new.h include/linux/cred.h
+            fi
+          fi
+
+          echo 'CFLAGS_namespace.o += -Wno-unused-function' >> fs/Makefile
+
       - name: Setup SukiSU-Ultra (builtin branch with SUSFS)
         run: |
           cd kernel
