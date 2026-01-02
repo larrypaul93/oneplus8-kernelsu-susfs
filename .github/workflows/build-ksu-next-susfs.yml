@@ -234,6 +234,28 @@ jobs:
           fi
           cd ../..
 
+          # Fix file_wrapper.c VFS API differences for kernel 4.19
+          echo "Fixing file_wrapper.c VFS API for kernel 4.19..."
+          cd drivers/kernelsu
+          if [ -f "file_wrapper.c" ]; then
+            # Add compat defines at top of file
+            echo "// Kernel 4.19 compatibility" > /tmp/file_compat.c
+            echo "#ifndef REMAP_FILE_DEDUP" >> /tmp/file_compat.c
+            echo "#define REMAP_FILE_DEDUP 0" >> /tmp/file_compat.c
+            echo "#endif" >> /tmp/file_compat.c
+            echo "" >> /tmp/file_compat.c
+            cat file_wrapper.c >> /tmp/file_compat.c
+            mv /tmp/file_compat.c file_wrapper.c
+            # Fix iopoll - doesn't exist in 4.19
+            sed -i 's/\.iopoll\s*=/.poll =/g' file_wrapper.c
+            sed -i 's/->iopoll/->poll/g' file_wrapper.c
+            # Fix remap_file_range - use dedupe_file_range in 4.19
+            sed -i 's/\.remap_file_range\s*=/.dedupe_file_range =/g' file_wrapper.c
+            sed -i 's/->remap_file_range/->dedupe_file_range/g' file_wrapper.c
+            echo "Fixed file_wrapper.c VFS API"
+          fi
+          cd ../..
+
       - name: Backport path_umount and get_cred_rcu
         run: |
           cd kernel
