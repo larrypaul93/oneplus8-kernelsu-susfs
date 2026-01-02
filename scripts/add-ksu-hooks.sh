@@ -20,15 +20,24 @@ extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 HOOKEOF
 sed -i '/#include <linux\/fs_struct.h>/r /tmp/exec_hook.txt' fs/exec.c
 
-# Add hook call after getname_flags - this is safe because it's after variable decls
-sed -i '/getname_flags(filename, lookup_flags, NULL)/a\
-#ifdef CONFIG_KSU\
-	if (unlikely(ksu_execveat_hook))\
-		ksu_handle_execveat(\&fd, \&filename, \&argv, \&envp, \&flags);\
-	else\
-		ksu_handle_execveat_sucompat(\&fd, \&filename, \&argv, \&envp, \&flags);\
-#endif
-' fs/exec.c
+# Add hook call in do_execveat_common function only (not other places using getname_flags)
+# Use awk to be more precise
+awk '
+/^static int do_execveat_common\(/ { in_func = 1 }
+in_func && /filename = getname_flags\(/ && !hook_added {
+    print
+    print "#ifdef CONFIG_KSU"
+    print "\tif (unlikely(ksu_execveat_hook))"
+    print "\t\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);"
+    print "\telse"
+    print "\t\tksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);"
+    print "#endif"
+    hook_added = 1
+    next
+}
+in_func && /^}$/ { in_func = 0 }
+{ print }
+' fs/exec.c > fs/exec.c.tmp && mv fs/exec.c.tmp fs/exec.c
 
 # Hook 2: fs/open.c - faccessat hook
 echo "Patching fs/open.c..."
