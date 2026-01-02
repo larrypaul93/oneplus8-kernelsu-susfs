@@ -16,6 +16,7 @@ cat > /tmp/exec_hook.txt << 'HOOKEOF'
 extern bool ksu_execveat_hook __read_mostly;
 extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);
 extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);
+extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);
 #endif
 HOOKEOF
 sed -i '/#include <linux\/fs_struct.h>/r /tmp/exec_hook.txt' fs/exec.c
@@ -31,6 +32,7 @@ in_func && /filename = getname_flags\(/ && !hook_added {
     print "\t\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);"
     print "\telse"
     print "\t\tksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);"
+    print "\tksu_handle_execveat_ksud(&fd, &filename, &argv, &envp, &flags);"
     print "#endif"
     hook_added = 1
     next
@@ -59,9 +61,9 @@ sed -i '/^static long do_faccessat/,/^}/{
 #endif
 }' fs/open.c
 
-# Hook 3: fs/read_write.c - vfs_read hook (OPTIONAL - may not be supported by all KSU forks)
-# Skip this hook as not all KernelSU forks export ksu_vfs_read_hook
-echo "Skipping fs/read_write.c hook (optional, not all KSU forks support it)..."
+# Hook 3: fs/read_write.c - vfs_read hook (OPTIONAL)
+# Skip for now - the ksud hook is the critical one for boot integration
+echo "Skipping fs/read_write.c hook (optional, complex signature differences between forks)..."
 
 # Hook 4: fs/stat.c - stat hook
 echo "Patching fs/stat.c..."
