@@ -154,11 +154,23 @@ jobs:
           for f in drivers/kernelsu/*.c; do
             if grep -q "put_task_struct" "$f" || grep -q "get_task_struct" "$f"; then
               if ! grep -q "linux/sched/task.h" "$f"; then
-                # Create temp file with the include added at top
                 echo '#include <linux/sched/task.h>' > /tmp/fix_header.c
                 cat "$f" >> /tmp/fix_header.c
                 mv /tmp/fix_header.c "$f"
                 echo "Added sched/task.h to $f"
+              fi
+            fi
+          done
+
+          # Fix get_random_bytes - add random.h header
+          echo "Fixing get_random_bytes for kernel 4.19..."
+          for f in drivers/kernelsu/*.c; do
+            if grep -q "get_random_bytes" "$f"; then
+              if ! grep -q "linux/random.h" "$f"; then
+                echo '#include <linux/random.h>' > /tmp/fix_random.c
+                cat "$f" >> /tmp/fix_random.c
+                mv /tmp/fix_random.c "$f"
+                echo "Added random.h to $f"
               fi
             fi
           done
@@ -253,6 +265,22 @@ jobs:
             echo "Removed file_wrapper.o from Makefile"
           fi
           cd ../..
+
+          # Disable SELinux sepolicy.c for kernel 4.19 - structures changed significantly
+          echo "Disabling SELinux sepolicy.c for kernel 4.19..."
+          cd drivers/kernelsu/selinux
+          if [ -f "sepolicy.c" ]; then
+            mv sepolicy.c sepolicy.c.bak
+            echo "// Disabled for kernel 4.19 - SELinux structures incompatible" > sepolicy.c
+            echo "#include <linux/types.h>" >> sepolicy.c
+            echo "" >> sepolicy.c
+            echo "// Stub functions - SELinux policy modification not available on 4.19" >> sepolicy.c
+            echo "int ksu_handle_sepolicy(void) { return 0; }" >> sepolicy.c
+            echo "void ksu_sepolicy_init(void) {}" >> sepolicy.c
+            echo "void ksu_sepolicy_exit(void) {}" >> sepolicy.c
+            echo "Created stub sepolicy.c"
+          fi
+          cd ../../..
 
       - name: Backport path_umount and get_cred_rcu
         run: |

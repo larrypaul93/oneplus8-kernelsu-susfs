@@ -153,6 +153,18 @@ jobs:
             fi
           done
 
+          # Add missing include for get_random_bytes
+          for f in *.c; do
+            if grep -q "get_random_bytes" "$f"; then
+              if ! grep -q "linux/random.h" "$f"; then
+                echo '#include <linux/random.h>' > /tmp/fix_random.c
+                cat "$f" >> /tmp/fix_random.c
+                mv /tmp/fix_random.c "$f"
+                echo "Added random.h to $f"
+              fi
+            fi
+          done
+
           # Fix force_sig API - kernel 4.19 requires 2 args (sig, task), newer kernels only 1
           echo "Fixing force_sig API for kernel 4.19..."
           for f in *.c; do
