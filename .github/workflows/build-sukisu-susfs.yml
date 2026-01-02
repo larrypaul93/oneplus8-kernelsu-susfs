@@ -68,27 +68,6 @@ jobs:
           sed -i '/#include "schgm-flash.h"/a #include "smb5-lib.h"' drivers/power/supply/qcom/schgm-flash.c || true
           sed -i 's/global_zone_page_state(NR_IONCACHE_PAGES)/0/g' drivers/staging/android/ion/ion_system_heap.c || true
 
-      - name: Add SUSFS fields to kernel structures
-        run: |
-          cd kernel
-          echo "Adding SUSFS fields to task_struct and vfsmount..."
-
-          # Add susfs fields to task_struct near ANDROID_VENDOR_DATA
-          if ! grep -q "susfs_task_state" include/linux/sched.h; then
-            echo "Adding susfs fields to task_struct..."
-            sed -i '/ANDROID_VENDOR_DATA.*task_struct/i \\tunsigned long susfs_task_state;\n\tunsigned long susfs_last_fake_mnt_id;' include/linux/sched.h || \
-            sed -i '/^};.*end of task_struct/i \\tunsigned long susfs_task_state;\n\tunsigned long susfs_last_fake_mnt_id;' include/linux/sched.h || true
-          fi
-
-          # Add susfs_mnt_id_backup to struct vfsmount
-          if ! grep -q "susfs_mnt_id_backup" include/linux/mount.h; then
-            echo "Adding susfs_mnt_id_backup to vfsmount..."
-            sed -i '/int mnt_flags;/a \\tu64 susfs_mnt_id_backup;' include/linux/mount.h
-          fi
-
-          grep -A2 -B2 "susfs" include/linux/sched.h | head -20 || echo "Field may be in different location"
-          grep -A2 -B2 "susfs" include/linux/mount.h | head -10 || echo "Field may be in different location"
-
       - name: Copy SUSFS source files to kernel
         run: |
           cd kernel
