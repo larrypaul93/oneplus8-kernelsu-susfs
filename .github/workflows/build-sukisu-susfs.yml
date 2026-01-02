@@ -136,6 +136,18 @@ jobs:
           echo "ccflags-y += -DKSU_UMOUNT" >> drivers/kernelsu/Makefile
           ls -la drivers/kernelsu/
 
+      - name: Fix SukiSU for kernel 4.19 headers
+        run: |
+          cd kernel/drivers/kernelsu
+          echo "Fixing missing headers for kernel 4.19..."
+          # Add missing include for put_task_struct
+          for f in *.c; do
+            if grep -q "put_task_struct" "$f" && ! grep -q "linux/sched/task.h" "$f"; then
+              sed -i '/#include <linux\/sched.h>/a #include <linux/sched/task.h>' "$f" 2>/dev/null || true
+              echo "Added sched/task.h to $f"
+            fi
+          done
+
       - name: Backport path_umount and get_cred_rcu
         run: |
           cd kernel
