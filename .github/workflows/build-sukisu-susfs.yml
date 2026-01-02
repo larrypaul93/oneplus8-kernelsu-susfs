@@ -76,6 +76,90 @@ jobs:
           ls -la fs/susfs.c
           ls -la include/linux/susfs*.h
 
+      - name: Adapt SUSFS for SukiSU-Ultra compatibility
+        run: |
+          cd kernel
+          echo "Adapting SUSFS for SukiSU-Ultra API compatibility..."
+
+          # SukiSU-Ultra expects newer SUSFS API - add missing constants
+          cat >> include/linux/susfs_def.h << 'EOFAPI'
+
+          /* Additional constants for SukiSU-Ultra compatibility */
+          #ifndef SUSFS_MAGIC
+          #define SUSFS_MAGIC 0xFAFAFAFA
+          #endif
+          #ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
+          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
+          #endif
+          #ifndef CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH
+          #define CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH 0x55551
+          #endif
+          #ifndef CMD_SUSFS_SET_SDCARD_ROOT_PATH
+          #define CMD_SUSFS_SET_SDCARD_ROOT_PATH 0x55552
+          #endif
+          #ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS
+          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS 0x55561
+          #endif
+          #ifndef CMD_SUSFS_ADD_SUS_MAP
+          #define CMD_SUSFS_ADD_SUS_MAP 0x60020
+          #endif
+          #ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
+          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
+          #endif
+          EOFAPI
+
+          # SukiSU expects void __user ** signatures - update function declarations in susfs.h
+          echo "Updating SUSFS function signatures for SukiSU compatibility..."
+
+          # Change struct pointer to void ** for SukiSU compatibility
+          sed -i 's/int susfs_add_sus_path(struct st_susfs_sus_path\* __user user_info)/void susfs_add_sus_path(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_add_sus_mount(struct st_susfs_sus_mount\* __user user_info)/void susfs_add_sus_mount(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_add_sus_kstat(struct st_susfs_sus_kstat\* __user user_info)/void susfs_add_sus_kstat(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_update_sus_kstat(struct st_susfs_sus_kstat\* __user user_info)/void susfs_update_sus_kstat(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_add_try_umount(struct st_susfs_try_umount\* __user user_info)/void susfs_add_try_umount(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_set_uname(struct st_susfs_uname\* __user user_info)/void susfs_set_uname(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_set_cmdline_or_bootconfig(char\* __user user_fake_boot_config)/void susfs_set_cmdline_or_bootconfig(void __user **user_info)/g' include/linux/susfs.h
+          sed -i 's/int susfs_add_open_redirect(struct st_susfs_open_redirect\* __user user_info)/void susfs_add_open_redirect(void __user **user_info)/g' include/linux/susfs.h
+
+          # Add stub declarations for missing functions
+          cat >> include/linux/susfs.h << 'EOFSTUB'
+
+          /* SukiSU-Ultra compatibility stubs */
+          #ifndef susfs_add_sus_path_loop
+          static inline void susfs_add_sus_path_loop(void __user **user_info) {}
+          #endif
+          #ifndef susfs_set_android_data_root_path
+          static inline void susfs_set_android_data_root_path(void __user **user_info) {}
+          #endif
+          #ifndef susfs_set_sdcard_root_path
+          static inline void susfs_set_sdcard_root_path(void __user **user_info) {}
+          #endif
+          #ifndef susfs_hide_sus_mnts_for_all_procs
+          static inline void susfs_hide_sus_mnts_for_all_procs(void) {}
+          #endif
+          #ifndef susfs_add_sus_map
+          static inline void susfs_add_sus_map(void __user **user_info) {}
+          #endif
+          #ifndef susfs_enable_avc_log_spoofing
+          static inline void susfs_enable_avc_log_spoofing(void) {}
+          #endif
+          EOFSTUB
+
+          # Update susfs.c function implementations to use new signatures
+          echo "Updating susfs.c function implementations..."
+
+          # Change function signature and add copy_from_user with dereferencing
+          sed -i 's/int susfs_add_sus_path(struct st_susfs_sus_path\* __user user_info) {/void susfs_add_sus_path(void __user **user_info) {\n\tstruct st_susfs_sus_path info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_path __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+          sed -i 's/int susfs_add_sus_mount(struct st_susfs_sus_mount\* __user user_info) {/void susfs_add_sus_mount(void __user **user_info) {\n\tstruct st_susfs_sus_mount info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_mount __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+          sed -i 's/int susfs_add_sus_kstat(struct st_susfs_sus_kstat\* __user user_info) {/void susfs_add_sus_kstat(void __user **user_info) {\n\tstruct st_susfs_sus_kstat info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_kstat __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+          sed -i 's/int susfs_update_sus_kstat(struct st_susfs_sus_kstat\* __user user_info) {/void susfs_update_sus_kstat(void __user **user_info) {\n\tstruct st_susfs_sus_kstat info;\n\tif (copy_from_user(\&info, (struct st_susfs_sus_kstat __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+          sed -i 's/int susfs_add_try_umount(struct st_susfs_try_umount\* __user user_info) {/void susfs_add_try_umount(void __user **user_info) {\n\tstruct st_susfs_try_umount info;\n\tif (copy_from_user(\&info, (struct st_susfs_try_umount __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+          sed -i 's/int susfs_set_uname(struct st_susfs_uname\* __user user_info) {/void susfs_set_uname(void __user **user_info) {\n\tstruct st_susfs_uname info;\n\tif (copy_from_user(\&info, (struct st_susfs_uname __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+          sed -i 's/int susfs_add_open_redirect(struct st_susfs_open_redirect\* __user user_info) {/void susfs_add_open_redirect(void __user **user_info) {\n\tstruct st_susfs_open_redirect info;\n\tif (copy_from_user(\&info, (struct st_susfs_open_redirect __user*)*user_info, sizeof(info))) return;/g' fs/susfs.c
+
+          echo "SUSFS adapted for SukiSU-Ultra"
+          grep -E "susfs_add_sus_path|SUSFS_MAGIC" include/linux/susfs.h | head -5
+
       - name: Apply SUSFS kernel patch
         run: |
           cd kernel
@@ -166,29 +250,37 @@ jobs:
         run: |
           cd kernel
           echo "Setting up SukiSU-Ultra (builtin branch for non-GKI)..."
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+
+          # Clone SukiSU-Ultra builtin branch explicitly
+          git clone --depth=1 -b builtin https://github.com/SukiSU-Ultra/SukiSU-Ultra.git SukiSU-Ultra
+          ls -la SukiSU-Ultra/kernel/
+
+          # Setup symlink like the setup.sh does
+          mkdir -p drivers
+          ln -sf "$(realpath SukiSU-Ultra/kernel)" drivers/kernelsu
+
+          # Add to Makefile
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          fi
+
+          # Add to Kconfig
+          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+
           if [ ! -d "drivers/kernelsu" ]; then
             echo "ERROR: SukiSU-Ultra setup failed!"
             exit 1
           fi
           ls -la drivers/kernelsu/
-          echo "SukiSU-Ultra version:"
+          echo "SukiSU-Ultra builtin branch version:"
           cat drivers/kernelsu/Makefile | head -20
+          echo "Checking for SUSFS in supercalls.c:"
+          grep -c "SUSFS" drivers/kernelsu/supercalls.c || echo "SUSFS not found"
 
-      - name: Apply SUSFS patch to SukiSU-Ultra
-        run: |
-          cd kernel
-          echo "Applying SUSFS patch to SukiSU-Ultra driver..."
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch drivers/kernelsu/
-          cd drivers/kernelsu
-          patch -p1 --no-backup-if-mismatch -F3 < 10_enable_susfs_for_ksu.patch || {
-            echo "Patch had issues, checking if SUSFS already integrated..."
-            grep -r "susfs" *.c *.h 2>/dev/null | head -10 || true
-          }
-          rm -f 10_enable_susfs_for_ksu.patch
-          find . -name "*.rej" -delete 2>/dev/null || true
-          find . -name "*.orig" -delete 2>/dev/null || true
-          ls -la
+      # NOTE: NOT applying 10_enable_susfs_for_ksu.patch - SukiSU builtin already has SUSFS in supercalls.c
+      # The kernel SUSFS files (susfs.c, susfs.h) are needed but driver patch would conflict
 
       - name: Disable kprobes and enable manual hooks
         run: |
