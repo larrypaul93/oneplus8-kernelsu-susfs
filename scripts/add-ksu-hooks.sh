@@ -61,34 +61,10 @@ sed -i '/^static long do_faccessat/,/^}/{
 #endif
 }' fs/open.c
 
-# Hook 3: fs/read_write.c - sys_read hook for init.rc injection (CRITICAL)
-# This hook injects KernelSU service into init.rc during boot
-echo "Patching fs/read_write.c..."
-
-cat > /tmp/read_hook.txt << 'HOOKEOF'
-
-#ifdef CONFIG_KSU
-extern bool ksu_vfs_read_hook __read_mostly;
-extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr);
-#endif
-HOOKEOF
-
-# Find a good include to add after
-if grep -q "#include <linux/uio.h>" fs/read_write.c; then
-    sed -i '/#include <linux\/uio.h>/r /tmp/read_hook.txt' fs/read_write.c
-elif grep -q "#include <linux/pagemap.h>" fs/read_write.c; then
-    sed -i '/#include <linux\/pagemap.h>/r /tmp/read_hook.txt' fs/read_write.c
-fi
-
-# Add hook call at the start of SYSCALL_DEFINE3(read, ...)
-# The hook goes before the actual ksys_read call
-sed -i '/^SYSCALL_DEFINE3(read,/,/^}/{
-  /return ksys_read/i\
-#ifdef CONFIG_KSU\
-\tif (unlikely(ksu_vfs_read_hook))\
-\t\tksu_handle_sys_read(fd, \&buf, \&count);\
-#endif
-}' fs/read_write.c
+# Hook 3: fs/read_write.c - sys_read hook
+# DISABLED: This hook caused boot issues (blank screen)
+# The init.rc injection may need different approach for this kernel
+echo "Skipping fs/read_write.c hook (caused boot issues)..."
 
 # Hook 4: fs/stat.c - stat hook
 echo "Patching fs/stat.c..."
@@ -110,30 +86,8 @@ sed -i '/^int vfs_statx/,/^}/{
 }' fs/stat.c
 
 # Hook 5: drivers/input/input.c - input event hook for volume key detection
-echo "Patching drivers/input/input.c..."
-
-cat > /tmp/input_hook.txt << 'HOOKEOF'
-
-#ifdef CONFIG_KSU
-extern bool ksu_input_hook __read_mostly;
-extern int ksu_handle_input_handle_event(unsigned int type, unsigned int code, int value);
-#endif
-HOOKEOF
-
-if grep -q "#include <linux/input/mt.h>" drivers/input/input.c; then
-    sed -i '/#include <linux\/input\/mt.h>/r /tmp/input_hook.txt' drivers/input/input.c
-elif grep -q "#include \"input-compat.h\"" drivers/input/input.c; then
-    sed -i '/#include "input-compat.h"/r /tmp/input_hook.txt' drivers/input/input.c
-fi
-
-# Add hook in input_handle_event function
-sed -i '/^static void input_handle_event/,/^}/{
-  /add_input_randomness/i\
-#ifdef CONFIG_KSU\
-\tif (unlikely(ksu_input_hook))\
-\t\tksu_handle_input_handle_event(type, code, value);\
-#endif
-}' drivers/input/input.c
+# DISABLED: May cause boot issues, can be added later if needed
+echo "Skipping drivers/input/input.c hook (optional, disabled for stability)..."
 
 # Hook 6: kernel/reboot.c - CRITICAL for SUSFS supercalls
 # This hook allows KernelSU/SUSFS to receive commands via sys_reboot syscall
