@@ -1,8 +1,8 @@
-name: Build SukiSU-Ultra + SUSFS (Simple)
+name: Build SukiSU-Ultra Debug (No SUSFS)
 
 on:
   workflow_dispatch:
-    # Simplified build based on Build 20
+    # Debug build - Base SukiSU without SUSFS to confirm base works
 
 env:
   KERNEL_SOURCE: https://github.com/LineageOS/android_kernel_oneplus_sm8250.git
@@ -152,111 +152,10 @@ jobs:
           EOFSTUB
           echo 'obj-y += oplus_stubs.o' >> drivers/soc/oplus/Makefile
 
-      - name: Apply SUSFS v2.0.0 patches
+      - name: Setup SukiSU-Ultra (builtin only - NO SUSFS)
         run: |
           cd kernel
-          echo "Applying SUSFS v2.0.0 patches..."
-
-          # Apply SUSFS source files
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs-patches/00_add_susfs_source.patch || true
-
-          # Apply SUSFS kernel hooks
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs-patches/01_add_susfs_hooks.patch || true
-
-          # Apply misc SUSFS patches
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs-patches/02_add_susfs_misc.patch || true
-
-          # Apply LineageOS-specific fixes
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs-patches/03_fix_exec.patch || true
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs-patches/04_fix_namespace_clone_mnt.patch || true
-          patch -p1 --no-backup-if-mismatch -F3 < $GITHUB_WORKSPACE/susfs-patches/05_fix_task_mmu.patch || true
-
-          # Cleanup
-          find . -name "*.rej" -delete 2>/dev/null || true
-          find . -name "*.orig" -delete 2>/dev/null || true
-
-          # Update fs/Makefile for SUSFS
-          if ! grep -q "susfs.o" fs/Makefile; then
-            sed -i '/^obj-y.*:=/a obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
-          fi
-
-      - name: Backport path_umount and get_cred_rcu
-        run: |
-          cd kernel
-          echo "Adding kernel backports for 4.19..."
-
-          if ! grep -q "^static int can_umount" fs/namespace.c; then
-            echo "" >> fs/namespace.c
-            echo "/* Backport can_umount for SUSFS/KernelSU */" >> fs/namespace.c
-            echo "static int can_umount(const struct path *path, int flags)" >> fs/namespace.c
-            echo "{" >> fs/namespace.c
-            echo "    struct mount *mnt = real_mount(path->mnt);" >> fs/namespace.c
-            echo "    if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))" >> fs/namespace.c
-            echo "        return -EINVAL;" >> fs/namespace.c
-            echo "    if (!may_mount())" >> fs/namespace.c
-            echo "        return -EPERM;" >> fs/namespace.c
-            echo "    if (path->dentry != path->mnt->mnt_root)" >> fs/namespace.c
-            echo "        return -EINVAL;" >> fs/namespace.c
-            echo "    if (!check_mnt(mnt))" >> fs/namespace.c
-            echo "        return -EINVAL;" >> fs/namespace.c
-            echo "    if (mnt->mnt.mnt_flags & MNT_LOCKED)" >> fs/namespace.c
-            echo "        return -EINVAL;" >> fs/namespace.c
-            echo "    if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))" >> fs/namespace.c
-            echo "        return -EPERM;" >> fs/namespace.c
-            echo "    return 0;" >> fs/namespace.c
-            echo "}" >> fs/namespace.c
-          fi
-
-          if ! grep -q "^int path_umount" fs/namespace.c; then
-            echo "" >> fs/namespace.c
-            echo "/* Backport path_umount from Linux 5.9+ for KernelSU/SUSFS */" >> fs/namespace.c
-            echo "int path_umount(struct path *path, int flags)" >> fs/namespace.c
-            echo "{" >> fs/namespace.c
-            echo "    struct mount *mnt = real_mount(path->mnt);" >> fs/namespace.c
-            echo "    int ret;" >> fs/namespace.c
-            echo "    ret = can_umount(path, flags);" >> fs/namespace.c
-            echo "    if (!ret)" >> fs/namespace.c
-            echo "        ret = do_umount(mnt, flags);" >> fs/namespace.c
-            echo "    dput(path->dentry);" >> fs/namespace.c
-            echo "    mntput_no_expire(mnt);" >> fs/namespace.c
-            echo "    return ret;" >> fs/namespace.c
-            echo "}" >> fs/namespace.c
-            echo "EXPORT_SYMBOL(path_umount);" >> fs/namespace.c
-          fi
-
-          if ! grep -q "int path_umount" fs/internal.h; then
-            sed -i '/^extern void __init mnt_init/a int path_umount(struct path *path, int flags);' fs/internal.h
-          fi
-
-          if ! grep -q "get_cred_rcu" include/linux/cred.h; then
-            echo "Adding get_cred_rcu backport..."
-            echo "" > /tmp/get_cred_rcu.txt
-            echo "/* Backport get_cred_rcu for KernelSU */" >> /tmp/get_cred_rcu.txt
-            echo "static inline const struct cred *get_cred_rcu(const struct cred *cred)" >> /tmp/get_cred_rcu.txt
-            echo "{" >> /tmp/get_cred_rcu.txt
-            echo "    struct cred *nonconst_cred = (struct cred *) cred;" >> /tmp/get_cred_rcu.txt
-            echo "    if (!cred)" >> /tmp/get_cred_rcu.txt
-            echo "        return NULL;" >> /tmp/get_cred_rcu.txt
-            echo "    if (!atomic_inc_not_zero(&nonconst_cred->usage))" >> /tmp/get_cred_rcu.txt
-            echo "        return NULL;" >> /tmp/get_cred_rcu.txt
-            echo "    return cred;" >> /tmp/get_cred_rcu.txt
-            echo "}" >> /tmp/get_cred_rcu.txt
-            echo "" >> /tmp/get_cred_rcu.txt
-            LINE=$(grep -n "^static inline void put_cred" include/linux/cred.h | head -1 | cut -d: -f1)
-            if [ -n "$LINE" ]; then
-              head -n $((LINE - 1)) include/linux/cred.h > /tmp/cred_new.h
-              cat /tmp/get_cred_rcu.txt >> /tmp/cred_new.h
-              tail -n +$LINE include/linux/cred.h >> /tmp/cred_new.h
-              mv /tmp/cred_new.h include/linux/cred.h
-            fi
-          fi
-
-          echo 'CFLAGS_namespace.o += -Wno-unused-function' >> fs/Makefile
-
-      - name: Setup SukiSU-Ultra with builtin method
-        run: |
-          cd kernel
-          # Use builtin method like Build 20 - let SukiSU handle hooks automatically
+          # Use builtin method like Build 20 - NO SUSFS
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 
       - name: Build Kernel
@@ -269,26 +168,13 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             $DEFCONFIG
 
-          # Enable KSU and SUSFS
+          # Enable KSU only - NO SUSFS
           scripts/config --file out/.config -e KSU
-          scripts/config --file out/.config -e KALLSYMS
-          scripts/config --file out/.config -e KALLSYMS_ALL
-          scripts/config --file out/.config -e THREAD_INFO_IN_TASK
-          scripts/config --file out/.config -e KSU_SUSFS
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_PATH
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
-          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_UNAME
-          scripts/config --file out/.config -e KSU_SUSFS_ENABLE_LOG
-          scripts/config --file out/.config -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-          scripts/config --file out/.config -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-          scripts/config --file out/.config -e KSU_SUSFS_OPEN_REDIRECT
-          scripts/config --file out/.config -e KSU_SUSFS_SUS_MAP
 
           make O=out ARCH=arm64 olddefconfig
 
-          echo "Config check:"
-          grep -E "CONFIG_KSU|CONFIG_THREAD_INFO" out/.config | head -20
+          echo "Config check (no SUSFS expected):"
+          grep -E "CONFIG_KSU" out/.config | head -10
 
           make -j$(nproc --all) O=out ARCH=arm64 CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -314,14 +200,14 @@ jobs:
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=1;/g' anykernel.sh
 
-          ZIP_NAME="SukiSU-SUSFS-Simple_OnePlus8Pro_$(date +%Y%m%d).zip"
+          ZIP_NAME="SukiSU-Debug-NoSUSFS_OnePlus8Pro_$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" * -x .git README.md *placeholder
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create boot.img
         run: |
           cd kernel
-          BOOT_IMG="SukiSU-SUSFS-Simple_boot_OnePlus8Pro_$(date +%Y%m%d).img"
+          BOOT_IMG="SukiSU-Debug-NoSUSFS_boot_OnePlus8Pro_$(date +%Y%m%d).img"
           lz4 -l -12 --favor-decSpeed "$GITHUB_WORKSPACE/lineage-os/ramdisk.cpio" ramdisk.cpio.lz4
           python3 $GITHUB_WORKSPACE/mkbootimg/mkbootimg.py \
             --kernel out/arch/arm64/boot/Image \
@@ -356,25 +242,18 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: sukisu-susfs-simple-${{ github.run_number }}
-          name: SukiSU-Ultra + SUSFS (Simple) Build ${{ github.run_number }}
+          tag_name: sukisu-debug-${{ github.run_number }}
+          name: SukiSU-Ultra Debug (No SUSFS) Build ${{ github.run_number }}
           body: |
-            ## SukiSU-Ultra + SUSFS v2.0.0 (Simple Build)
+            ## SukiSU-Ultra Debug Build (NO SUSFS)
 
-            This is a **simplified build** based on the working Build 20 approach:
-            - Uses SukiSU-Ultra builtin setup (handles hooks automatically)
-            - No manual kprobes disabling
-            - No manual hook scripts
+            This is a **debug build** to test if base SukiSU still boots:
+            - Uses SukiSU-Ultra builtin setup
+            - NO SUSFS patches
+            - NO kernel backports (path_umount, get_cred_rcu)
 
-            ### SUSFS v2.0.0 Features
-            - SUS_PATH, SUS_MOUNT, SUS_KSTAT
-            - SPOOF_UNAME, SPOOF_CMDLINE_OR_BOOTCONFIG
-            - OPEN_REDIRECT, SUS_MAP
-            - HIDE_KSU_SUSFS_SYMBOLS
-
-            ### Installation
-            - Flash boot.img via fastboot
-            - Or flash ZIP via TWRP
+            If this boots, the SUSFS patches/backports are causing the issue.
+            If this doesn't boot, the base SukiSU setup has changed.
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.BOOT_IMG }}
